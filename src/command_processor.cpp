@@ -109,6 +109,7 @@ static void IRAM_ATTR mlxTask(void* main_handle) {
     uint8_t error_count  = 255;
     for (;;) {
         if (error_count >= 128) {
+            _i2c_in.release();
             if (error_count == 128) {  // 強制的にSTOPコンディションを送信する
                 ESP_EARLY_LOGD("mlxTask", "I2C force stop");
                 gpio_config_t io_conf;
@@ -131,7 +132,6 @@ static void IRAM_ATTR mlxTask(void* main_handle) {
                     gpio_hi(PIN_IN_SDA);
                 }
             }
-            _i2c_in.release();
             // initialize sensor.
             _i2c_in.init(PORT_I2C, PIN_IN_SDA, PIN_IN_SCL);
             int retry = 16;
