@@ -15,3 +15,5 @@ constexpr const uint8_t config_param_t::sens_noisefilter_value[];
 constexpr const uint8_t config_param_t::sens_monitorarea_value[];
 constexpr const uint8_t config_param_t::misc_brightness_value[];
 constexpr const uint8_t config_param_t::misc_volume_value[];
+constexpr const uint32_t config_param_t::misc_autopoweroff_value[];
+constexpr const uint32_t config_param_t::misc_sentry_interval_value[];

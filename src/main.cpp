@@ -143,6 +143,36 @@ static void soundWiFiDisconnected(void) {
     }
 }
 
+// Sentry Mode task for periodic temperature reporting
+struct SentryData {
+    uint32_t last_report_time = 0;
+    float last_avg_temp = 0;
+    float last_min_temp = 0;
+    float last_max_temp = 0;
+};
+
+SentryData sentry_data;
+
+void sentrymodeTask(void*) {
+    while (1) {
+        if (draw_param.misc_sentry_mode) {
+            uint32_t report_interval = config_param_t::misc_sentry_interval_value[draw_param.misc_sentry_interval];
+            uint32_t now = millis() / 1000;
+            
+            if ((now - sentry_data.last_report_time) >= report_interval) {
+                if (idx_recv >= 0) {
+                    auto frame = &framedata[idx_recv];
+                    sentry_data.last_min_temp = convertRawToCelsius(frame->temp[frame->lowest]);
+                    sentry_data.last_max_temp = convertRawToCelsius(frame->temp[frame->highest]);
+                    sentry_data.last_avg_temp = convertRawToCelsius(frame->temp[frame->average]);
+                }
+                sentry_data.last_report_time = now;
+            }
+        }
+        vTaskDelay(10000 / portTICK_PERIOD_MS);
+    }
+}
+
 struct rect_t {
     int16_t x;
     int16_t y;
@@ -214,6 +244,9 @@ static constexpr const char KEY_MISC_LANGUAGE[]    = "language";
 static constexpr const char KEY_MISC_LAYOUT[]      = "layout";
 static constexpr const char KEY_MISC_COLOR[]       = "color";
 static constexpr const char KEY_MISC_POINTER[]     = "pointer";
+static constexpr const char KEY_MISC_AUTOPOWEROFF[] = "autopoweroff";
+static constexpr const char KEY_MISC_SENTRY_INTERVAL[] = "sentry_interval";
+static constexpr const char KEY_MISC_SENTRY_MODE[] = "sentry_mode";
 // static constexpr const char KEY_MISC_ROTATION[]     = "msc_rotation";
 
 std::string convert(const std::string& src) {
@@ -248,6 +281,9 @@ void config_param_t::saveNvs(void) {
     pref.putUChar(KEY_NET_JPGQUALITY, net_jpg_quality);
     pref.putInt(KEY_NET_TIMEZONE, oncloud_timezone_sec);
     pref.putUChar(KEY_MISC_BRIGHTNESS, misc_brightness);
+    pref.putUChar(KEY_MISC_AUTOPOWEROFF, misc_autopoweroff);
+    pref.putUChar(KEY_MISC_SENTRY_INTERVAL, misc_sentry_interval);
+    pref.putUChar(KEY_MISC_SENTRY_MODE, misc_sentry_mode);
     // pref.putString(KEY_NET_SSID         , net_ssid.c_str()     );
     // pref.putString(KEY_NET_PWD          , convert(net_pwd).c_str());
     // pref.putUChar( KEY_MISC_ROTATION    , misc_rotation        );
@@ -293,6 +329,11 @@ void config_param_t::loadNvs(void) {
             (misc_pointer_t)pref.getUChar(KEY_MISC_POINTER, misc_pointer);
         misc_layout = pref.getUChar(KEY_MISC_LAYOUT, misc_layout);
         misc_color  = (misc_color_t)pref.getUChar(KEY_MISC_COLOR, misc_color);
+        misc_autopoweroff = (misc_autopoweroff_t)pref.getUChar(
+            KEY_MISC_AUTOPOWEROFF, misc_autopoweroff);
+        misc_sentry_interval = (config_param_t::misc_sentry_interval_t)pref.getUChar(
+            KEY_MISC_SENTRY_INTERVAL, misc_sentry_interval);
+        misc_sentry_mode = pref.getBool(KEY_MISC_SENTRY_MODE, misc_sentry_mode);
         pref.end();
     }
 
@@ -321,6 +362,9 @@ void config_param_t::loadDefault(void) {
     misc_color.setDefault();
     misc_pointer = misc_pointer_t ::misc_pointer_pointtxt;
     misc_volume  = misc_volume_t ::misc_volume_normal;
+    misc_autopoweroff = misc_autopoweroff_t ::misc_autopoweroff_never;
+    misc_sentry_interval = config_param_t::misc_sentry_interval_t ::misc_sentry_interval_5m;
+    misc_sentry_mode = false;
 }
 
 void config_param_t::setEmissivity(uint8_t emissivity) {
@@ -3038,6 +3082,12 @@ void setup(void) {
     M5.begin();
     M5.BtnPWR.setHoldThresh(1024);
     display.setRotation(1);
+    
+    // Display boot text
+    display.setTextDatum(middle_center);
+    display.setTextColor(TFT_WHITE, TFT_BLACK);
+    display.fillScreen(TFT_BLACK);
+    display.drawString("T-Lite (Lite)", display.width() / 2, display.height() / 2);
 
     {
         auto cfg             = M5.Speaker.config();
@@ -3068,6 +3118,9 @@ void setup(void) {
     
     // Initialize font (was previously set via misc_language_func)
     draw_param.setFont(&fonts::Font2);
+    
+    // Start Sentry Mode task on PRO_CPU
+    xTaskCreatePinnedToCore(sentrymodeTask, "sentryTask", 2048, nullptr, 1, nullptr, PRO_CPU_NUM);
     
     for (int i = 0; i < 4; ++i) {
         draw_param.graph_data.temp_arrays[i] = (uint16_t*)malloc(
@@ -3330,6 +3383,123 @@ void loop(void) {
     //*/
 
     M5.update();
+    
+    // **SENTRY MODE HANDLING**
+    if (draw_param.misc_sentry_mode) {
+        // Sentry mode active
+        static uint32_t sentry_display_time = 0;
+        static bool sentry_display_active = false;
+        
+        // Center button single press: show SENTRY MODE for a few seconds
+        if (M5.BtnC.wasClicked()) {
+            sentry_display_active = true;
+            sentry_display_time = millis();
+            if (draw_param.misc_volume != draw_param.misc_volume_t::misc_volume_mute) {
+                M5.Speaker.tone(1000, 100);
+            }
+        }
+        
+        // Center button hold: exit sentry mode
+        if (M5.BtnC.wasHold()) {
+            draw_param.misc_sentry_mode = false;
+            ::config_save_countdown = 60;
+            display.fillScreen(TFT_BLACK);
+            display.setTextDatum(middle_center);
+            display.setTextColor(TFT_WHITE);
+            display.drawString("Exiting Sentry", display.width() / 2, display.height() / 2);
+            if (draw_param.misc_volume != draw_param.misc_volume_t::misc_volume_mute) {
+                M5.Speaker.tone(600, 200);
+                delay(100);
+                M5.Speaker.tone(400, 200);
+            }
+            delay(1000);
+        }
+        
+        // Display sentry status briefly
+        if (sentry_display_active) {
+            display.setTextDatum(middle_center);
+            display.fillScreen(TFT_BLACK);
+            display.setTextColor(0xFFE0);  // Yellow
+            display.drawString("SENTRY MODE", display.width() / 2, display.height() / 2 - 12);
+            display.setTextColor(TFT_WHITE);
+            if (sentry_data.last_avg_temp > -100) {
+                char temp_str[32];
+                snprintf(temp_str, sizeof(temp_str), "%.1fC", sentry_data.last_avg_temp);
+                display.drawString(temp_str, display.width() / 2, display.height() / 2 + 12);
+            }
+            
+            if (millis() - sentry_display_time > 3000) {
+                sentry_display_active = false;
+                display.fillScreen(TFT_BLACK);
+            }
+        } else {
+            display.fillScreen(TFT_BLACK);
+        }
+        
+        return;
+    }
+    
+    // **NORMAL MODE BUTTON HANDLING**
+    // Track last activity time for auto-poweroff
+    static uint32_t last_activity_time = millis();
+    static bool low_power_mode_active = false;
+    static bool shutdown_warning_given = false;
+    
+    // Check for any button activity to reset timer
+    if (M5.BtnA.wasPressed() || M5.BtnB.wasPressed() || 
+        M5.BtnC.wasPressed() || M5.BtnPWR.wasPressed()) {
+        last_activity_time = millis();
+        shutdown_warning_given = false;
+    }
+    
+    // Low power mode - activate when battery < 20%
+    if (!low_power_mode_active && draw_param.battery_level < 20) {
+        low_power_mode_active = true;
+        // Kill WiFi
+        if (draw_param.net_wifi_mode != draw_param.net_wifi_mode_t::net_wifi_mode_off) {
+            draw_param.net_wifi_mode = draw_param.net_wifi_mode_t::net_wifi_mode_off;
+            WiFi.disconnect(true);
+            WiFi.mode(WIFI_OFF);
+            need_wifi_reconnect = false;
+        }
+        // Drop brightness to low
+        draw_param.misc_brightness = draw_param.misc_brightness_t::misc_brightness_low;
+        display.setBrightness(draw_param.misc_brightness_value[draw_param.misc_brightness]);
+        // Show warning
+        overlay_ui.show(64, "Low Battery", "Power Save Mode");
+        if (draw_param.misc_volume != draw_param.misc_volume_t::misc_volume_mute) {
+            M5.Speaker.tone(800, 100);
+            delay(150);
+            M5.Speaker.tone(600, 100);
+        }
+    }
+    
+    // Auto-poweroff logic
+    if (draw_param.misc_autopoweroff != draw_param.misc_autopoweroff_t::misc_autopoweroff_never) {
+        uint32_t timeout_ms = draw_param.misc_autopoweroff_value[draw_param.misc_autopoweroff] * 1000;
+        uint32_t elapsed = millis() - last_activity_time;
+        
+        // 5 seconds before shutdown, give warning beeps
+        if (!shutdown_warning_given && elapsed >= (timeout_ms - 5000) && elapsed < timeout_ms) {
+            shutdown_warning_given = true;
+            // 5 beeps at 1 second intervals
+            for (int i = 0; i < 5; i++) {
+                if (draw_param.misc_volume != draw_param.misc_volume_t::misc_volume_mute) {
+                    M5.Speaker.tone(1000, 200);
+                }
+                delay(1000);
+            }
+        }
+        
+        // Time to power off
+        if (elapsed >= timeout_ms) {
+            if (config_save_countdown) {
+                draw_param.saveNvs();
+            }
+            M5.Power.powerOff();
+        }
+    }
+    
     /*
         if (M5.BtnPWR.wasClicked()) {
             confmode = !confmode;

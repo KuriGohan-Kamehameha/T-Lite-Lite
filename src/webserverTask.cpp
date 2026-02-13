@@ -350,6 +350,29 @@ static bool response_main(draw_param_t* draw_param, connection_t* conn) {
             cbuf, snprintf(cbuf, sizeof(cbuf),
                            "<option value=\"%d\">layout %d</option>\n", i, i));
     }
+    strbuf += "</select></li>\n";
+
+    strbuf +=
+        "<li>Sentry Mode: <select id='misc_sentry_mode' "
+        "onchange='f(\"misc_sentry_mode=\" + "
+        "this.options[this.selectedIndex].value)'>";
+    strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf),
+                                 "<option value=\"0\">%s</option>\n",
+                                 draw_param->misc_sentry_mode ? "Off" : "Off"));
+    strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf),
+                                 "<option value=\"1\">%s</option>\n",
+                                 !draw_param->misc_sentry_mode ? "On" : "On"));
+    strbuf += "</select></li>\n";
+
+    strbuf +=
+        "<li>Sentry Interval: <select id='misc_sentry_interval' "
+        "onchange='f(\"misc_sentry_interval=\" + "
+        "this.options[this.selectedIndex].value)'>";
+    for (int i = 0; i < draw_param->misc_sentry_interval_max; ++i) {
+        strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf),
+                                     "<option value=\"%d\">%s</option>\n", i,
+                                     draw_param->misc_sentry_interval.getText(i)));
+    }
     strbuf += "</select></li>\n</ul>\n";
     strbuf += HTML_footer;
 
@@ -415,6 +438,12 @@ static bool response_param(draw_param_t* draw_param, connection_t* conn) {
                 draw_param->in_config_mode = false;
             } else if (key == "misc_color") {
                 draw_param->misc_color.set(v);
+            } else if (key == "misc_sentry_mode") {
+                draw_param->misc_sentry_mode = (v != 0);
+                config_save_countdown = 60;
+            } else if (key == "misc_sentry_interval") {
+                draw_param->misc_sentry_interval.set(v);
+                config_save_countdown = 60;
             }
         }
         // draw_param->saveNvs();
@@ -476,6 +505,12 @@ static bool response_param(draw_param_t* draw_param, connection_t* conn) {
     strbuf.append(cbuf,
                   snprintf(cbuf, sizeof(cbuf), ",\n \"misc_color\": \"%d\"",
                            draw_param->misc_color.get()));
+    strbuf.append(cbuf,
+                  snprintf(cbuf, sizeof(cbuf), ",\n \"misc_sentry_mode\": \"%d\"",
+                           draw_param->misc_sentry_mode ? 1 : 0));
+    strbuf.append(cbuf,
+                  snprintf(cbuf, sizeof(cbuf), ",\n \"misc_sentry_interval\": \"%d\"",
+                           draw_param->misc_sentry_interval.get()));
     strbuf += "\n}\n\n";
 
     client->print(
@@ -845,11 +880,44 @@ struct response_table_t {
     bool (*response_func)(draw_param_t*, connection_t*);
 };
 
+// Sentry Mode API endpoints
+extern struct SentryData {
+    uint32_t last_report_time;
+    float last_avg_temp;
+    float last_min_temp;
+    float last_max_temp;
+} sentry_data;
+
+static bool response_sentry_status(draw_param_t* draw_param, connection_t* conn) {
+    auto client = &conn->client;
+    char cbuf[256];
+    std::string response;
+    
+    response += HTTP_200_json;
+    response += "{\n";
+    response.append(cbuf, snprintf(cbuf, sizeof(cbuf), 
+        "  \"sentry_mode\": %s,\n", draw_param->misc_sentry_mode ? "true" : "false"));
+    response.append(cbuf, snprintf(cbuf, sizeof(cbuf),
+        "  \"avg_temp\": %.1f,\n", sentry_data.last_avg_temp));
+    response.append(cbuf, snprintf(cbuf, sizeof(cbuf),
+        "  \"min_temp\": %.1f,\n", sentry_data.last_min_temp));
+    response.append(cbuf, snprintf(cbuf, sizeof(cbuf),
+        "  \"max_temp\": %.1f,\n", sentry_data.last_max_temp));
+    response.append(cbuf, snprintf(cbuf, sizeof(cbuf),
+        "  \"battery_level\": %d\n", draw_param->battery_level));
+    response += "}\n";
+    
+    client->print(response.c_str());
+    client->flush();
+    
+    return true;
+}
+
 static constexpr const response_table_t response_table[] = {
     {"/", response_top},        {"/main", response_main},
     {"/json", response_json},   {"/text", response_text},
     {"/wifi", response_wifi},   {"/stream", response_stream},
-    {"/param", response_param},
+    {"/param", response_param}, {"/api/sentry/status", response_sentry_status},
     // { "/test"   , response_test },
 };
 

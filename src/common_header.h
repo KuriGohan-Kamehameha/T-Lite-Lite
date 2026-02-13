@@ -936,11 +936,39 @@ struct config_param_t {
     // "Normal" };
     static constexpr const uint8_t misc_volume_value[] = {0, 80, 160};
 
+    enum misc_autopoweroff_t {
+        misc_autopoweroff_30s,
+        misc_autopoweroff_1m,
+        misc_autopoweroff_2m,
+        misc_autopoweroff_5m,
+        misc_autopoweroff_10m,
+        misc_autopoweroff_15m,
+        misc_autopoweroff_30m,
+        misc_autopoweroff_1h,
+        misc_autopoweroff_2h,
+        misc_autopoweroff_never,
+        misc_autopoweroff_max,
+    };
+    static constexpr const uint32_t misc_autopoweroff_value[] = {
+        30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 0
+    }; // seconds, 0 = never
+
     // enum cloud_upload_t {
     //     cloud_upload_off,
     //     cloud_upload_on,
     //     cloud_upload_max,
     // };
+
+    enum misc_sentry_interval_t {
+        misc_sentry_interval_1m,
+        misc_sentry_interval_5m,
+        misc_sentry_interval_15m,
+        misc_sentry_interval_30m,
+        misc_sentry_interval_max,
+    };
+    static constexpr const uint32_t misc_sentry_interval_value[] = {
+        60, 300, 900, 1800
+    }; // seconds
 
     enum misc_color_t {
         misc_color_golden,
@@ -1123,6 +1151,36 @@ struct config_param_t {
         misc_volume_t ::misc_volume_normal,
         misc_volume_t ::misc_volume_max,
         misc_volume_func};
+
+    config_property_localize_enum_t<misc_autopoweroff_t> misc_autopoweroff = {
+        {"Auto Power-Off"},
+        (const localize_text_t[]){
+            {"30 Seconds"},
+            {"1 Minute"},
+            {"2 Minutes"},
+            {"5 Minutes"},
+            {"10 Minutes"},
+            {"15 Minutes"},
+            {"30 Minutes"},
+            {"1 Hour"},
+            {"2 Hours"},
+            {"Never"},
+        },
+        misc_autopoweroff_t ::misc_autopoweroff_never,
+        misc_autopoweroff_t ::misc_autopoweroff_max};
+
+    config_property_localize_enum_t<misc_sentry_interval_t> misc_sentry_interval = {
+        {"Sentry Report Interval"},
+        (const localize_text_t[]){
+            {"1 Minute"},
+            {"5 Minutes"},
+            {"15 Minutes"},
+            {"30 Minutes"},
+        },
+        misc_sentry_interval_t ::misc_sentry_interval_5m,
+        misc_sentry_interval_t ::misc_sentry_interval_max};
+
+    bool misc_sentry_mode = false;
 
     config_property_localize_enum_t<misc_brightness_t> misc_brightness = {
         {"LCD Brightness"},
