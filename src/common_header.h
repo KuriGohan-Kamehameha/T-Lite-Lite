@@ -1180,7 +1180,20 @@ struct config_param_t {
         misc_sentry_interval_t ::misc_sentry_interval_5m,
         misc_sentry_interval_t ::misc_sentry_interval_max};
 
-    bool misc_sentry_mode = false;
+    enum misc_sentry_mode_t {
+        misc_sentry_mode_off,
+        misc_sentry_mode_on,
+        misc_sentry_mode_max,
+    };
+
+    config_property_localize_enum_t<misc_sentry_mode_t> misc_sentry_mode = {
+        {"Sentry Mode"},
+        (const localize_text_t[]){
+            {"Off"},
+            {"On"},
+        },
+        misc_sentry_mode_t ::misc_sentry_mode_off,
+        misc_sentry_mode_t ::misc_sentry_mode_max};
 
     config_property_localize_enum_t<misc_brightness_t> misc_brightness = {
         {"LCD Brightness"},

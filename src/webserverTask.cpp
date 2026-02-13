@@ -285,12 +285,11 @@ static bool response_main(draw_param_t* draw_param, connection_t* conn) {
         "<li>Sentry Mode: <select id='misc_sentry_mode' "
         "onchange='f(\"misc_sentry_mode=\" + "
         "this.options[this.selectedIndex].value)'>";
-    strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf),
-                                 "<option value=\"0\">%s</option>\n",
-                                 draw_param->misc_sentry_mode ? "Off" : "Off"));
-    strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf),
-                                 "<option value=\"1\">%s</option>\n",
-                                 !draw_param->misc_sentry_mode ? "On" : "On"));
+    for (int i = 0; i < draw_param->misc_sentry_mode_max; ++i) {
+        strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf),
+                                     "<option value=\"%d\">%s</option>\n", i,
+                                     draw_param->misc_sentry_mode.getText(i)));
+    }
     strbuf += "</select></li>\n";
 
     strbuf +=
@@ -441,7 +440,7 @@ static bool response_param(draw_param_t* draw_param, connection_t* conn) {
             } else if (key == "misc_color") {
                 draw_param->misc_color.set(v);
             } else if (key == "misc_sentry_mode") {
-                draw_param->misc_sentry_mode = (v != 0);
+                draw_param->misc_sentry_mode.set(v);
                 config_save_countdown = 60;
             } else if (key == "misc_sentry_interval") {
                 draw_param->misc_sentry_interval.set(v);
@@ -509,7 +508,7 @@ static bool response_param(draw_param_t* draw_param, connection_t* conn) {
                            draw_param->misc_color.get()));
     strbuf.append(cbuf,
                   snprintf(cbuf, sizeof(cbuf), ",\n \"misc_sentry_mode\": \"%d\"",
-                           draw_param->misc_sentry_mode ? 1 : 0));
+                           draw_param->misc_sentry_mode.get()));
     strbuf.append(cbuf,
                   snprintf(cbuf, sizeof(cbuf), ",\n \"misc_sentry_interval\": \"%d\"",
                            draw_param->misc_sentry_interval.get()));
@@ -898,7 +897,7 @@ static bool response_sentry_status(draw_param_t* draw_param, connection_t* conn)
     response += HTTP_200_json;
     response += "{\n";
     response.append(cbuf, snprintf(cbuf, sizeof(cbuf), 
-        "  \"sentry_mode\": %s,\n", draw_param->misc_sentry_mode ? "true" : "false"));
+        "  \"sentry_mode\": %s,\n", draw_param->misc_sentry_mode.get() != draw_param_t::misc_sentry_mode_t::misc_sentry_mode_off ? "true" : "false"));
     response.append(cbuf, snprintf(cbuf, sizeof(cbuf),
         "  \"avg_temp\": %.1f,\n", sentry_data.last_avg_temp));
     response.append(cbuf, snprintf(cbuf, sizeof(cbuf),
