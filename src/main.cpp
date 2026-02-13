@@ -155,7 +155,7 @@ SentryData sentry_data;
 
 void sentrymodeTask(void*) {
     while (1) {
-        if (draw_param.misc_sentry_mode) {
+        if (draw_param.misc_sentry_mode.get() != draw_param_t::misc_sentry_mode_t::misc_sentry_mode_off) {
             uint32_t report_interval = config_param_t::misc_sentry_interval_value[draw_param.misc_sentry_interval];
             uint32_t now = millis() / 1000;
             
@@ -283,7 +283,7 @@ void config_param_t::saveNvs(void) {
     pref.putUChar(KEY_MISC_BRIGHTNESS, misc_brightness);
     pref.putUChar(KEY_MISC_AUTOPOWEROFF, misc_autopoweroff);
     pref.putUChar(KEY_MISC_SENTRY_INTERVAL, misc_sentry_interval);
-    pref.putUChar(KEY_MISC_SENTRY_MODE, misc_sentry_mode);
+    pref.putUChar(KEY_MISC_SENTRY_MODE, misc_sentry_mode.get());
     // pref.putString(KEY_NET_SSID         , net_ssid.c_str()     );
     // pref.putString(KEY_NET_PWD          , convert(net_pwd).c_str());
     // pref.putUChar( KEY_MISC_ROTATION    , misc_rotation        );
@@ -333,7 +333,8 @@ void config_param_t::loadNvs(void) {
             KEY_MISC_AUTOPOWEROFF, misc_autopoweroff);
         misc_sentry_interval = (config_param_t::misc_sentry_interval_t)pref.getUChar(
             KEY_MISC_SENTRY_INTERVAL, misc_sentry_interval);
-        misc_sentry_mode = pref.getBool(KEY_MISC_SENTRY_MODE, misc_sentry_mode);
+        misc_sentry_mode = (config_param_t::misc_sentry_mode_t)pref.getUChar(
+            KEY_MISC_SENTRY_MODE, misc_sentry_mode);
         pref.end();
     }
 
@@ -364,7 +365,7 @@ void config_param_t::loadDefault(void) {
     misc_volume  = misc_volume_t ::misc_volume_normal;
     misc_autopoweroff = misc_autopoweroff_t ::misc_autopoweroff_never;
     misc_sentry_interval = config_param_t::misc_sentry_interval_t ::misc_sentry_interval_5m;
-    misc_sentry_mode = false;
+    misc_sentry_mode = misc_sentry_mode_t ::misc_sentry_mode_off;
 }
 
 void config_param_t::setEmissivity(uint8_t emissivity) {
@@ -3401,7 +3402,7 @@ void loop(void) {
         
         // Center button hold: exit sentry mode
         if (M5.BtnC.wasHold()) {
-            draw_param.misc_sentry_mode = false;
+            draw_param.misc_sentry_mode.set(draw_param_t::misc_sentry_mode_t::misc_sentry_mode_off);
             ::config_save_countdown = 60;
             display.fillScreen(TFT_BLACK);
             display.setTextDatum(middle_center);
