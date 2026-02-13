@@ -169,33 +169,7 @@ static bool response_main(draw_param_t* draw_param, connection_t* conn) {
     strbuf.reserve(8192);
     char cbuf[64];
 
-    strbuf = html_1;
-    strbuf +=
-        "<label for='tgl_cloud'>Cloud</label><input type='checkbox' "
-        "id='tgl_cloud'>\n<ul>\n"
-        "<li>Upload Interval:<select id='cloud_interval' "
-        "onchange='f(\"cloud_interval=\" + "
-        "this.options[this.selectedIndex].value)'>";
-    for (int i = 0; i < draw_param->cloud_interval_max; ++i) {
-        strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf),
-                                     "<option value=\"%d\">%s</option>\n", i,
-                                     draw_param->cloud_interval.getText(i)));
-    }
-    strbuf +=
-        "</select></li>\n"
-        "<li><form "
-        "onsubmit='f(\"cloud_token=\"+document.getElementById(\"cloud_token\")."
-        "value); return false;'>Confirm Code:<br>"
-        "<input type='text' name='cloud_token' id='cloud_token' "
-        "placeholder='User defined code'>\n"
-        "<button type='submit'>Save</button></form></li>";
-    strbuf +=
-        "<li> Cloud Online URL:<br>\n<a target='_blank' rel='noreferrer' "
-        "href=\"";
-    strbuf += draw_param->cloud_url;
-    strbuf += "\">";
-    strbuf += draw_param->cloud_url;
-    strbuf += "</a>\n</li></ul>\n";
+    strbuf += html_1;
 
     strbuf +=
         "<label for='tgl_alarm'>Alarm</label><input type='checkbox' "
@@ -340,17 +314,6 @@ static bool response_main(draw_param_t* draw_param, connection_t* conn) {
     }
     strbuf += "</select></li>\n";
 
-    strbuf +=
-        "<li>Language: <select id='misc_language' "
-        "onchange='f(\"misc_language=\" + "
-        "this.options[this.selectedIndex].value)'>";
-    for (int i = 0; i < draw_param->misc_language_max; ++i) {
-        strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf),
-                                     "<option value=\"%d\">%s</option>\n", i,
-                                     draw_param->misc_language_text[i]));
-    }
-    strbuf += "</select></li>\n";
-
     strbuf += "<li> LAN Stream Quality: <span id='jq'>";
     strbuf += draw_param->net_jpg_quality.getText();
     strbuf +=
@@ -418,8 +381,6 @@ static bool response_param(draw_param_t* draw_param, connection_t* conn) {
         } else if (key == "range_temp_lower") {
             draw_param->range_temp_lower =
                 convertCelsiusToRaw(atof(val.c_str()));
-        } else if (key == "cloud_token") {
-            draw_param->cloud_token = val.c_str();
         } else {
             int v = atoi(val.c_str());
             if (key == "alarm_mode") {
@@ -447,8 +408,6 @@ static bool response_param(draw_param_t* draw_param, connection_t* conn) {
                 draw_param->misc_volume.set(v);
             } else if (key == "misc_brightness") {
                 draw_param->misc_brightness.set(v);
-            } else if (key == "misc_language") {
-                draw_param->misc_language.set(v);
             } else if (key == "misc_pointer") {
                 draw_param->misc_pointer.set(v);
             } else if (key == "misc_layout") {
@@ -456,11 +415,6 @@ static bool response_param(draw_param_t* draw_param, connection_t* conn) {
                 draw_param->in_config_mode = false;
             } else if (key == "misc_color") {
                 draw_param->misc_color.set(v);
-            }
-            // else if (key == "cloud_upload"      ) { draw_param->cloud_upload
-            // .set(v); }
-            else if (key == "cloud_interval") {
-                draw_param->cloud_interval.set(v);
             }
         }
         // draw_param->saveNvs();
@@ -514,9 +468,6 @@ static bool response_param(draw_param_t* draw_param, connection_t* conn) {
         cbuf, snprintf(cbuf, sizeof(cbuf), ",\n \"misc_brightness\": \"%d\"",
                        draw_param->misc_brightness.get()));
     strbuf.append(cbuf,
-                  snprintf(cbuf, sizeof(cbuf), ",\n \"misc_language\": \"%d\"",
-                           draw_param->misc_language.get()));
-    strbuf.append(cbuf,
                   snprintf(cbuf, sizeof(cbuf), ",\n \"misc_pointer\": \"%d\"",
                            draw_param->misc_pointer.get()));
     strbuf.append(cbuf,
@@ -525,12 +476,6 @@ static bool response_param(draw_param_t* draw_param, connection_t* conn) {
     strbuf.append(cbuf,
                   snprintf(cbuf, sizeof(cbuf), ",\n \"misc_color\": \"%d\"",
                            draw_param->misc_color.get()));
-    strbuf.append(cbuf,
-                  snprintf(cbuf, sizeof(cbuf), ",\n \"cloud_interval\": \"%d\"",
-                           draw_param->cloud_interval.get()));
-    strbuf.append(cbuf,
-                  snprintf(cbuf, sizeof(cbuf), ",\n \"cloud_token\": \"%s\"",
-                           draw_param->cloud_token.c_str()));
     strbuf += "\n}\n\n";
 
     client->print(
@@ -681,10 +626,10 @@ static bool response_wifi(draw_param_t* draw_param, connection_t* conn) {
             draw_param->sys_ssid         = ssid;
             draw_param->net_tmp_ssid     = ssid;
             draw_param->net_tmp_pwd      = password;
-            draw_param->net_running_mode = draw_param->net_running_mode_offline;
+            draw_param->net_wifi_mode = draw_param->net_wifi_mode_off;
             delay(64);
-            draw_param->net_running_mode =
-                draw_param->net_running_mode_lan_cloud;
+            draw_param->net_wifi_mode =
+                draw_param->net_wifi_mode_connect_saved;
             /*
                         WiFi.begin(ssid.c_str(), password.c_str());
                         client->setTimeout(10);
@@ -830,10 +775,8 @@ static bool response_top(draw_param_t* draw_param, connection_t* conn) {
     client->print(HTML_style);
     client->print(html_2);
 
-    client->printf(
-        "<a target='_blank' rel='noreferrer' href='%s'>Image "
-        "(ConfirmCode:%s)</a>",
-        draw_param->cloud_url.c_str(), draw_param->cloud_token.c_str());
+    // Cloud functionality removed
+
     // if (WiFi.getMode() & WIFI_AP) {
     //     client->print(html_3);
     // }
