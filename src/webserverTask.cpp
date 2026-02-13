@@ -280,6 +280,31 @@ static bool response_main(draw_param_t* draw_param, connection_t* conn) {
         "li>\n</ul>\n";
 
     strbuf +=
+        "<label for='tgl_network'>Network</label><input type='checkbox' "
+        "id='tgl_network'>\n<ul>\n"
+        "<li>Sentry Mode: <select id='misc_sentry_mode' "
+        "onchange='f(\"misc_sentry_mode=\" + "
+        "this.options[this.selectedIndex].value)'>";
+    strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf),
+                                 "<option value=\"0\">%s</option>\n",
+                                 draw_param->misc_sentry_mode ? "Off" : "Off"));
+    strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf),
+                                 "<option value=\"1\">%s</option>\n",
+                                 !draw_param->misc_sentry_mode ? "On" : "On"));
+    strbuf += "</select></li>\n";
+
+    strbuf +=
+        "<li>Sentry Interval: <select id='misc_sentry_interval' "
+        "onchange='f(\"misc_sentry_interval=\" + "
+        "this.options[this.selectedIndex].value)'>";
+    for (int i = 0; i < draw_param->misc_sentry_interval_max; ++i) {
+        strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf),
+                                     "<option value=\"%d\">%s</option>\n", i,
+                                     draw_param->misc_sentry_interval.getText(i)));
+    }
+    strbuf += "</select></li>\n</ul>\n";
+
+    strbuf +=
         "<label for='tgl_misc'>Others</label><input type='checkbox' "
         "id='tgl_misc'>\n<ul>\n"
         "<li>CPU Speed: <select id='misc_cpuspeed' "
@@ -349,29 +374,6 @@ static bool response_main(draw_param_t* draw_param, connection_t* conn) {
         strbuf.append(
             cbuf, snprintf(cbuf, sizeof(cbuf),
                            "<option value=\"%d\">layout %d</option>\n", i, i));
-    }
-    strbuf += "</select></li>\n";
-
-    strbuf +=
-        "<li>Sentry Mode: <select id='misc_sentry_mode' "
-        "onchange='f(\"misc_sentry_mode=\" + "
-        "this.options[this.selectedIndex].value)'>";
-    strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf),
-                                 "<option value=\"0\">%s</option>\n",
-                                 draw_param->misc_sentry_mode ? "Off" : "Off"));
-    strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf),
-                                 "<option value=\"1\">%s</option>\n",
-                                 !draw_param->misc_sentry_mode ? "On" : "On"));
-    strbuf += "</select></li>\n";
-
-    strbuf +=
-        "<li>Sentry Interval: <select id='misc_sentry_interval' "
-        "onchange='f(\"misc_sentry_interval=\" + "
-        "this.options[this.selectedIndex].value)'>";
-    for (int i = 0; i < draw_param->misc_sentry_interval_max; ++i) {
-        strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf),
-                                     "<option value=\"%d\">%s</option>\n", i,
-                                     draw_param->misc_sentry_interval.getText(i)));
     }
     strbuf += "</select></li>\n</ul>\n";
     strbuf += HTML_footer;
