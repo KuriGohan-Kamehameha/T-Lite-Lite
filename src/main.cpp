@@ -23,7 +23,6 @@
 #include "jpg/jpge.h"
 
 #include "resource/bmp_logo.h"
-#include "resource/jpg_staff.h"
 #include "resource/wav_enter.h"
 
 DNSServer dnsServer;
@@ -37,7 +36,16 @@ auto& display = M5.Display;
 screenshot_streamer_t screenshot_holder;
 draw_param_t draw_param;
 
-static constexpr const char* cloud_server_name = "ezdata.m5stack.com";
+// Preset WiFi networks
+struct wifi_preset_t {
+    const char* ssid;
+    const char* password;
+} wifi_presets[3] = {
+    {"IoTA", "keyforaccesstothisrestrictedwirelessnnetwork"},
+    {"", ""},  // work: empty
+    {"", ""}   // custom: empty
+};
+static int current_preset_idx = 0;
 
 static constexpr const char* ntp_server[] = {"0.pool.ntp.org", "1.pool.ntp.org",
                                              "2.pool.ntp.org"};
@@ -75,14 +83,11 @@ volatile int idx_recv = -1;
 
 static int smooth_move(int dst, int src) {
     return (dst == src) ? dst : ((dst + src + (src < dst ? 1 : 0)) >> 1);
-    // return (dst == src) ? dst : ((dst * 3 + src * 5 + (src < dst ? 5 : 0)) >>
-    // 3);
 }
 
 static void soundStartUp(void) {
     if (draw_param.misc_volume != draw_param.misc_volume_t::misc_volume_mute) {
         M5.Speaker.playRaw(wav_enter, sizeof(wav_enter), 48000);
-        //     M5.Speaker.playRaw(wav_startup, sizeof(wav_startup), 24000);
     }
 }
 static void soundEnter(void) {
@@ -98,20 +103,17 @@ static void soundExit(void) {
 static void soundMoveCursor(void) {
     if (draw_param.misc_volume != draw_param.misc_volume_t::misc_volume_mute) {
         M5.Speaker.playRaw(wav_enter, sizeof(wav_enter), 42000);
-        // M5.Speaker.tone(4400, 80);
     }
 }
 static void soundValueChange(void) {
     if (draw_param.misc_volume != draw_param.misc_volume_t::misc_volume_mute) {
         M5.Speaker.playRaw(wav_enter, sizeof(wav_enter), 48000, false, 1, 0,
                            true);
-        // M5.Speaker.tone(2200, 50, 0);
     }
 }
 static void soundOperate(void) {
     if (draw_param.misc_volume != draw_param.misc_volume_t::misc_volume_mute) {
         M5.Speaker.playRaw(wav_enter, sizeof(wav_enter), 48000);
-        // M5.Speaker.playRaw(wav_confirm, sizeof(wav_confirm), 48000);
     }
 }
 static void soundUSBConnected(void) {
@@ -130,7 +132,6 @@ static void soundUSBDisconnected(void) {
 }
 static void soundWiFiConnected(void) {
     if (draw_param.misc_volume != draw_param.misc_volume_t::misc_volume_mute) {
-        // M5.Speaker.playRaw(wav_connect, sizeof(wav_connect), 24000);
         M5.Speaker.tone(1046.502f, 64, 0, false);  // C6
         M5.Speaker.tone(1567.982f, 64, 0, false);  // G6
     }
@@ -139,21 +140,6 @@ static void soundWiFiDisconnected(void) {
     if (draw_param.misc_volume != draw_param.misc_volume_t::misc_volume_mute) {
         M5.Speaker.tone(1760.000f, 64, 0, false);  // A6
         M5.Speaker.tone(1174.659f, 64, 0, false);  // D6
-    }
-}
-static void soundCloudSuccess(void) {
-    if (draw_param.misc_volume != draw_param.misc_volume_t::misc_volume_mute) {
-        // M5.Speaker.playRaw(wav_connect, sizeof(wav_connect), 24000);
-        M5.Speaker.tone(2093.005f, 48, 0, false);  // C7
-        M5.Speaker.tone(2637.020f, 48, 0, false);  // E7
-        M5.Speaker.tone(3135.963f, 48, 0, false);  // G7
-    }
-}
-static void soundCloudError(void) {
-    if (draw_param.misc_volume != draw_param.misc_volume_t::misc_volume_mute) {
-        M5.Speaker.tone(3520.000f, 48, 0, false);  // A7
-        M5.Speaker.tone(2793.826f, 48, 0, false);  // F7
-        M5.Speaker.tone(2349.318f, 48, 0, false);  // D7
     }
 }
 
@@ -214,8 +200,8 @@ static constexpr const char KEY_SENS_MONITORAREA[] = "monitorarea";
 static constexpr const char KEY_SENS_EMISSIVITY[]  = "emissivity";
 static constexpr const char KEY_RANGE_AUTOSWITCH[] = "range_auto";
 static constexpr const char KEY_RANGE_UPPER[]      = "range_upper";
-static constexpr const char KEY_RANGE_LOWER[]      = "range_lower";
-static constexpr const char KEY_NET_RUNNING_MODE[] = "net_running";
+static constexpr const char KEY_RANGE_LOWER []      = "range_lower";
+static constexpr const char KEY_NET_WIFI_MODE[]    = "net_wifi";
 static constexpr const char KEY_NET_JPGQUALITY[]   = "jpg_quality";
 static constexpr const char KEY_CLOUD_UPLOAD[]     = "upload_ena";
 static constexpr const char KEY_CLOUD_INTERVAL[]   = "upload_int";
@@ -258,20 +244,10 @@ void config_param_t::saveNvs(void) {
     pref.putUChar(KEY_RANGE_AUTOSWITCH, range_autoswitch);
     pref.putUShort(KEY_RANGE_UPPER, range_temp_upper);
     pref.putUShort(KEY_RANGE_LOWER, range_temp_lower);
-    pref.putUChar(KEY_NET_RUNNING_MODE, net_running_mode);
-    // pref.putUChar( KEY_NET_SETUP_MODE   , net_setup_mode       );
-    // pref.putBool(  KEY_NET_WEBSERVER    , net_webserver        );
+    pref.putUChar(KEY_NET_WIFI_MODE, net_wifi_mode);
     pref.putUChar(KEY_NET_JPGQUALITY, net_jpg_quality);
     pref.putInt(KEY_NET_TIMEZONE, oncloud_timezone_sec);
-    // pref.putBool(  KEY_CLOUD_UPLOAD     , cloud_upload         );
-    pref.putUChar(KEY_CLOUD_INTERVAL, cloud_interval);
     pref.putUChar(KEY_MISC_BRIGHTNESS, misc_brightness);
-    pref.putUChar(KEY_MISC_VOLUME, misc_volume);
-    pref.putUChar(KEY_MISC_LANGUAGE, misc_language);
-    pref.putUChar(KEY_MISC_POINTER, misc_pointer);
-    pref.putUChar(KEY_MISC_LAYOUT, misc_layout);
-    pref.putUChar(KEY_MISC_COLOR, misc_color);
-    pref.putString(KEY_CLOUD_TOKEN, cloud_token.c_str());
     // pref.putString(KEY_NET_SSID         , net_ssid.c_str()     );
     // pref.putString(KEY_NET_PWD          , convert(net_pwd).c_str());
     // pref.putUChar( KEY_MISC_ROTATION    , misc_rotation        );
@@ -302,11 +278,8 @@ void config_param_t::loadNvs(void) {
             KEY_RANGE_AUTOSWITCH, range_autoswitch);
         range_temp_upper = pref.getUShort(KEY_RANGE_UPPER, range_temp_upper);
         range_temp_lower = pref.getUShort(KEY_RANGE_LOWER, range_temp_lower);
-        net_running_mode = (net_running_mode_t)pref.getUChar(
-            KEY_NET_RUNNING_MODE, net_running_mode);
-        // net_setup_mode       = (net_setup_mode_t)  pref.getUChar(
-        // KEY_NET_SETUP_MODE   , net_setup_mode       ); net_webserver        =
-        // pref.getBool(  KEY_NET_WEBSERVER    , net_webserver        );
+        net_wifi_mode = (net_wifi_mode_t)pref.getUChar(
+            KEY_NET_WIFI_MODE, net_wifi_mode);
         net_jpg_quality = pref.getUChar(KEY_NET_JPGQUALITY, net_jpg_quality);
         oncloud_timezone_sec =
             pref.getInt(KEY_NET_TIMEZONE, oncloud_timezone_sec);
@@ -316,23 +289,10 @@ void config_param_t::loadNvs(void) {
                                                            misc_brightness);
         misc_volume =
             (misc_volume_t)pref.getUChar(KEY_MISC_VOLUME, misc_volume);
-        misc_language =
-            (misc_language_t)pref.getUChar(KEY_MISC_LANGUAGE, misc_language);
         misc_pointer =
             (misc_pointer_t)pref.getUChar(KEY_MISC_POINTER, misc_pointer);
         misc_layout = pref.getUChar(KEY_MISC_LAYOUT, misc_layout);
         misc_color  = (misc_color_t)pref.getUChar(KEY_MISC_COLOR, misc_color);
-        // cloud_upload         = (cloud_upload_t)    pref.getUChar(
-        // KEY_CLOUD_UPLOAD     , cloud_upload         );
-        cloud_interval =
-            (cloud_interval_t)pref.getUChar(KEY_CLOUD_INTERVAL, cloud_interval);
-        cloud_token =
-            pref.getString(KEY_CLOUD_TOKEN, cloud_token.c_str()).c_str();
-        // net_ssid             = pref.getString(KEY_NET_SSID         ,
-        // net_ssid.c_str()     ).c_str(); net_pwd              = convert(
-        // pref.getString(KEY_NET_PWD          ,
-        // convert(net_pwd).c_str()).c_str()).c_str(); misc_rotation        =
-        // pref.getUChar( KEY_MISC_ROTATION    , misc_rotation        );
         pref.end();
     }
 
@@ -342,8 +302,7 @@ void config_param_t::loadNvs(void) {
 void config_param_t::loadDefault(void) {
     // net_ssid.clear();
     // net_pwd.clear();
-    net_running_mode  = net_running_mode_t::net_running_mode_offline;
-    net_setup_mode    = net_setup_mode_t ::net_setup_mode_off;
+    net_wifi_mode     = net_wifi_mode_t::net_wifi_mode_off;
     alarm_temperature = (100 + 64) * 128;
     alarm_mode        = alarm_mode_t ::alarm_mode_hightemp;
     alarm_reference   = alarm_reference_t ::alarm_reference_highest;
@@ -357,9 +316,7 @@ void config_param_t::loadDefault(void) {
     range_temp_lower = (20 + 64) * 128;
     misc_brightness  = misc_brightness_t ::misc_brightness_middle;
     misc_cpuspeed    = misc_cpuspeed_t ::misc_cpuspeed_160;
-    misc_language    = misc_language_t ::misc_language_en;
     net_jpg_quality  = 60;
-    cloud_interval   = cloud_interval_t ::cloud_interval_30sec;
     misc_layout      = 0;
     misc_color.setDefault();
     misc_pointer = misc_pointer_t ::misc_pointer_pointtxt;
@@ -1396,7 +1353,6 @@ class token_ui_t : public container_ui_t {
             mi >>= 4ull;
         }
         cbuf[4]                = '\0';
-        draw_param.cloud_token = cbuf;
 
         return false;
     }
@@ -1443,8 +1399,7 @@ class qr_ui2_t : public qr_ui_t {
 
     bool enter(control_ui_t* parent) override {
         qrcode_ui.show(value.text);
-        overlay_ui.show(255, "Confirm", "Code", "",
-                        draw_param.cloud_token.c_str());
+        overlay_ui.show(255, "Confirm", "Code", "");
         auto r1   = qrcode_ui.getTargetRect();
         auto r2   = overlay_ui.getTargetRect();
         int32_t x = (display.width() - (r1.w + r2.w));
@@ -1459,40 +1414,6 @@ class qr_ui2_t : public qr_ui_t {
         overlay_ui.setTargetRect(r2);
 
         return control_ui_t::enter(parent);
-    }
-};
-
-class staff_ui_t : public container_ui_t {
-   public:
-    itext_ui_t label;
-    itext_ui_t value;
-
-    staff_ui_t(void) = default;
-    staff_ui_t(const itext_t* text_, const itext_t* text2_)
-        : label{text_, &value}, value{text2_} {
-        _focus_target = &value;
-        _cursor_index = 1;
-        addItem(&label);
-        addItem(&value);
-        label.text_color = label_ui_text_color;
-        value.text_color = 0xFFFFu;
-    }
-
-    bool loop(void) override {
-        if (M5.BtnA.wasPressed() || M5.BtnB.wasPressed() ||
-            M5.BtnPWR.wasClicked() || M5.BtnPWR.wasHold() ||
-            M5.BtnC.wasClicked() || M5.BtnC.wasHold()) {
-            return false;
-        }
-        return true;
-    }
-    bool enter(control_ui_t* parent) override {
-        draw_param.misc_staff = 1;
-        return control_ui_t::enter(parent);
-    }
-    void exit(void) override {
-        draw_param.misc_staff = 0;
-        return control_ui_t::exit();
     }
 };
 
@@ -1586,47 +1507,26 @@ class config_ui_t : public container_ui_t {
     }
 
     void setup(void) override {
-        static constexpr const localize_text_t lt_Network = {"Network", "网络",
-                                                             "ネットワーク"};
-        static constexpr const localize_text_t lt_Cloud   = {
-            "Cloud", "云监控配置", "クラウド"};
-        static constexpr const localize_text_t lt_Alarm = {"Alarm", "报警设置",
-                                                           "アラーム"};
-        static constexpr const localize_text_t lt_Sensor = {
-            "Sensor", "传感器设置", "センサー"};
-        static constexpr const localize_text_t lt_Range = {"Range", "温度量程",
-                                                           "温度レンジ"};
-        static constexpr const localize_text_t lt_Others = {
-            "Others", "其他设置", "その他"};
+        static constexpr const localize_text_t lt_Network = {"Network"};
+        static constexpr const localize_text_t lt_Cloud = {"Cloud"};
+        static constexpr const localize_text_t lt_Alarm = {"Alarm"};
+        static constexpr const localize_text_t lt_Sensor = {"Sensor"};
+        static constexpr const localize_text_t lt_Range = {"Range"};
+        static constexpr const localize_text_t lt_Others = {"Settings"};
 
-        static constexpr const localize_text_t lt_LAN_QR_IP = {
-            "LAN Monitor (IP)", "局域网监控（IP方法）", "LANモニタ（IP）"};
-        static constexpr const localize_text_t lt_LAN_QR_mDNS = {
-            "LAN Monitor (mDNS)", "局域网监控（mDNS）", "LANモニタ（mDNS）"};
-        static constexpr const localize_text_t lt_Cloud_Online_QR = {
-            "Cloud Online QR", "云监控-网址", "クラウド監視"};
-        static constexpr const localize_text_t lt_Cloud_Confirm_Code = {
-            "Cloud Confirm Code", "云监控-配对码", "クラウド認証コード"};
-        static constexpr const localize_text_t lt_Temperature = {
-            "Temperature", "设定温度", "設定温度"};
-        static constexpr const localize_text_t lt_Emissivity = {
-            "Emissivity", "辐射率", "放射率"};
+        static constexpr const localize_text_t lt_LAN_QR_IP = {"LAN Monitor (IP)"};
+        static constexpr const localize_text_t lt_LAN_QR_mDNS = {"LAN Monitor (mDNS)"};
+        static constexpr const localize_text_t lt_Cloud_Online_QR = {"Cloud Online QR"};
+        static constexpr const localize_text_t lt_Cloud_Confirm_Code = {"Cloud Confirm Code"};
+        static constexpr const localize_text_t lt_Temperature = {"Temperature"};
+        static constexpr const localize_text_t lt_Emissivity = {"Emissivity"};
         static constexpr const single_text_t lt_Language = {"Language"};
-        static constexpr const localize_text_t lt_LAN_Stream_Quality = {
-            "LAN Stream Quality", "局域网视频流画质", "LANモニタの画質"};
-        static constexpr const localize_text_t lt_Factory_Reset = {
-            "Factory Reset", "恢复出厂设置", "出荷時設定に戻す"};
-        static constexpr const localize_text_t lt_Staff = {"Staff", "参与者",
-                                                           "開発スタッフ"};
-        static constexpr const localize_text_t lt_Staff_option = {
-            "Display Info", "显示信息", "情報表示"};
-        static constexpr const localize_text_t lt_Sens_TempHighest = {
-            "Upper Temperature", "上限温度", "上限温度"};
-        static constexpr const localize_text_t lt_Sens_TempLowest = {
-            "Lower Temperature", "下限温度", "下限温度"};
+        static constexpr const localize_text_t lt_LAN_Stream_Quality = {"LAN Stream Quality"};
+        static constexpr const localize_text_t lt_Factory_Reset = {"Factory Reset"};
+        static constexpr const localize_text_t lt_Sens_TempHighest = {"Upper Temperature"};
+        static constexpr const localize_text_t lt_Sens_TempLowest = {"Lower Temperature"};
 
         top_config_ui.addItem(new switch_ui_t{&lt_Network, &network_config_ui});
-        top_config_ui.addItem(new switch_ui_t{&lt_Cloud, &cloud_config_ui});
         top_config_ui.addItem(new switch_ui_t{&lt_Alarm, &alarm_config_ui});
         top_config_ui.addItem(new switch_ui_t{&lt_Sensor, &sens_config_ui});
         top_config_ui.addItem(new switch_ui_t{&lt_Range, &range_config_ui});
@@ -1635,19 +1535,11 @@ class config_ui_t : public container_ui_t {
         addItem(&top_config_ui);
 
         network_config_ui.addItem(
-            new value_ui_t{&draw_param.net_running_mode, true});
-        network_config_ui.addItem(
-            new value_ui_t{&draw_param.net_setup_mode, true});
+            new value_ui_t{&draw_param.net_wifi_mode, true});
         network_config_ui.addItem(
             new qr_ui_t{&lt_LAN_QR_IP, &draw_param.net_url_ip});
         network_config_ui.addItem(
             new qr_ui_t{&lt_LAN_QR_mDNS, &draw_param.net_url_mdns});
-        network_config_ui.addItem(
-            new qr_ui2_t{&lt_Cloud_Online_QR, &draw_param.cloud_url});
-        network_config_ui.addItem(
-            new token_ui_t{&lt_Cloud_Confirm_Code, &draw_param.cloud_token});
-        cloud_config_ui.addItem(
-            new value_ui_t{&draw_param.cloud_interval, true});
         alarm_config_ui.addItem(new value_ui_t{&draw_param.alarm_mode, true});
         alarm_config_ui.addItem(
             new value_ui_t{&lt_Temperature, &draw_param.alarm_temperature});
@@ -1666,7 +1558,6 @@ class config_ui_t : public container_ui_t {
             new value_ui_t{&lt_Sens_TempHighest, &draw_param.range_temp_upper});
         range_config_ui.addItem(
             new value_ui_t{&lt_Sens_TempLowest, &draw_param.range_temp_lower});
-        misc_config_ui.addItem(new value_ui_t{&draw_param.misc_language, true});
         misc_config_ui.addItem(new value_ui_t{&draw_param.misc_cpuspeed, true});
         misc_config_ui.addItem(new value_ui_t{&draw_param.misc_volume, true});
         misc_config_ui.addItem(
@@ -1675,7 +1566,6 @@ class config_ui_t : public container_ui_t {
                                               &draw_param.net_jpg_quality});
         misc_config_ui.addItem(new value_ui_t{
             &lt_Factory_Reset, &draw_param.misc_backtofactory, true});
-        misc_config_ui.addItem(new staff_ui_t{&lt_Staff, &lt_Staff_option});
 
         top_config_ui.setup();
 
@@ -1761,34 +1651,25 @@ class config_ui_t : public container_ui_t {
 };
 config_ui_t config_ui;
 
-void config_param_t::net_running_mode_func(net_running_mode_t v) {
+void config_param_t::net_wifi_mode_func(net_wifi_mode_t v) {
     switch (v) {
-        case net_running_mode_t::net_running_mode_offline:
+        case net_wifi_mode_t::net_wifi_mode_off:
             draw_param.request_wifi_state = 0;
             break;
 
-        case net_running_mode_t::net_running_mode_lan_cloud:
-        case net_running_mode_t::net_running_mode_lan:
-            draw_param.request_wifi_state |=
-                net_running_mode_t::net_running_mode_lan;
+        case net_wifi_mode_t::net_wifi_mode_connect_saved:
+        case net_wifi_mode_t::net_wifi_mode_accesspoint:
+            draw_param.request_wifi_state |= 1;  // Enable WiFi
             break;
 
         default:
-            draw_param.request_wifi_state &=
-                ~net_running_mode_t::net_running_mode_lan;
+            draw_param.request_wifi_state = 0;
             break;
     }
 }
 
 void config_param_t::misc_brightness_func(misc_brightness_t v) {
     // display.setBrightness(misc_brightness_value[v]);
-}
-
-void config_param_t::misc_language_func(misc_language_t v) {
-    display.setFont(misc_language_value[v]);
-    draw_param.setFont(misc_language_value[v]);
-    localize_text_t::localize_index = v;
-    config_ui.relocation();
 }
 
 void config_param_t::misc_volume_func(misc_volume_t v) {
@@ -1897,12 +1778,12 @@ class header_ui_t : public ui_base_t {
                             draw_param.net_apmode_ipaddr.toString().c_str()));
                 } else if (WiFi.getMode() == WIFI_STA) {
                     if (draw_param.sys_ssid.empty()) {
-                        if (param->net_setup_mode ==
-                            param->net_setup_mode_smartconfig) {
+                        if (param->net_wifi_mode ==
+                            param->net_wifi_mode_connect_saved) {
                             _text =
-                                "Please download and use \"ESP TOUCH\" app.  ";
+                                "Connecting to saved networks...  ";
                         } else {
-                            _text = "Please setting WiFi at first.  ";
+                            _text = "Configure WiFi first  ";
                         }
                     } else if (WiFi.isConnected()) {
                         _text.assign(
@@ -1970,7 +1851,7 @@ class header_ui_t : public ui_base_t {
         int xpos = _client_rect.right();
         {
             size_t level = 0;
-            if (param->net_running_mode & param->net_running_mode_lan) {
+            if (param->net_wifi_mode != param->net_wifi_mode_off) {
                 level = 1;
             }
             if (WiFi.status() == WL_CONNECTED) {
@@ -1987,44 +1868,7 @@ class header_ui_t : public ui_base_t {
                               icon_wifi565[level], 0x2002);
         }
 
-        if (param->net_running_mode & param->net_running_mode_cloud) {
-            int idx = -1;
-            switch (param->cloud_status) {
-                case param->cloud_status_t::cloud_connection:
-                    idx = 0;
-                    break;
-                case param->cloud_status_t::cloud_uploading:
-                    idx = (param->draw_count >> 3) & 3;
-                    break;
-                case param->cloud_status_t::cloud_complete:
-                    idx = 4;
-                    break;
-                case param->cloud_status_t::cloud_error:
-                    idx = 5;
-                    break;
-                case param->cloud_status_t::cloud_timerwait:
-                    idx = 6;
-                    break;
-                default:
-                    break;
-            }
-            if (idx >= 0) {
-                xpos -= 16;
-                // canvas->drawBitmap(xpos+1, _client_rect.y - canvas_y,
-                // icon_cloud[idx], 16, 12, TFT_WHITE);
-                canvas->pushImage(xpos, _client_rect.y - canvas_y, 16, 14,
-                                  icon_cloud565[idx], 0x2002);
-                if (idx == 6) {
-                    xpos -= 1;
-                    canvas->setTextSize(1);
-                    canvas->setTextColor(TFT_WHITE);
-                    canvas->setTextDatum(textdatum_t::top_right);
-                    xpos -= canvas->drawNumber(param->cloud_countdown_sec, xpos,
-                                               _client_rect.y - canvas_y - 1,
-                                               &fonts::Font2);
-                }
-            }
-        }
+        // Cloud functionality has been removed - no cloud icon drawing
 
         if (param->in_config_mode) {
             {
@@ -2936,45 +2780,17 @@ void drawTask(void*) {
     // draw_param.setColorTable(color_map_table[0]);
     graph_ui.setup(&draw_param);
 
-    bool prev_misc_staff = false;
-
     uint8_t prev_layout = 255;
 
     display.startWrite();
     for (;;) {
         ++draw_param.draw_count;
 
-        // {
-        //     auto r = config_ui.getTargetRect();
-        //     r.x = (draw_param.draw_count & 63);
-        //     r.y = (draw_param.draw_count & 63);
-        //     config_ui.setTargetRect(r);
-        // }
-
-        // if (display.getRotation() != draw_param.misc_rotation) {
-        //     display.setRotation(draw_param.misc_rotation);
-        // }
-
-        // if (disp_width != display.width()) {
-        //     disp_width = display.width();
-        //     disp_height = display.height();
-        //     auto depth = display.getColorDepth();
-        //     for (int i = 0; i < disp_buf_count; ++i) {
-        //         disp_buf[i].deleteSprite();
-        //         disp_buf[i].setPsram(false);
-        //         disp_buf[i].setColorDepth(depth);
-        //         disp_buf[i].createSprite(disp_width, disp_buf_height);
-        //     }
-        // }
         if (disp_buf[0].getFont() != draw_param.font) {
             for (int i = 0; i < disp_buf_count; ++i) {
                 disp_buf[i].setFont(draw_param.font);
             }
         }
-        // if (prev_color_table_idx != color_map_table_idx) {
-        //     prev_color_table_idx = color_map_table_idx;
-        //     draw_param.setColorTable(color_map_table[prev_color_table_idx]);
-        // }
 
         if (prev_layout !=
             (draw_param.misc_layout | draw_param.in_config_mode << 7)) {
@@ -3010,15 +2826,6 @@ void drawTask(void*) {
             ui->update(&draw_param);
         }
         uint32_t h = disp_buf_height;
-        if (prev_misc_staff != (bool)draw_param.misc_staff) {
-            prev_misc_staff = !prev_misc_staff;
-            if (prev_misc_staff) {
-                display.drawJpg(jpg_staff, sizeof(jpg_staff), 0, 0,
-                                display.width(), display.height(), 0, 0, 1.0f,
-                                1.0f, datum_t::middle_center);
-            }
-        }
-
         bool screenshot =
             screenshot_holder.initCapture(disp_width, disp_height);
         for (uint32_t y = 0; y < disp_height; y += h) {
@@ -3050,9 +2857,7 @@ void drawTask(void*) {
 
                 ui->draw(&draw_param, canvas, y, h);
             }
-            if (!prev_misc_staff) {
-                canvas->pushSprite(&display, 0, y);
-            }
+            canvas->pushSprite(&display, 0, y);
             if (screenshot) {
                 screenshot = screenshot_holder.addQueue(canvas, y);
                 if (screenshot) {
@@ -3067,19 +2872,17 @@ void drawTask(void*) {
 static bool sync_rtc_ntp(void) {
     if (sntp_get_sync_status() != SNTP_SYNC_STATUS_COMPLETED) return false;
 
-    time_t t = time(nullptr) + 1;        // Advance one second.
-    while (t > time(nullptr)) delay(1);  /// Synchronization in seconds
+    time_t t = time(nullptr) + 1;
+    while (t > time(nullptr)) delay(1);
     M5.Rtc.setDateTime(gmtime(&t));
 
     return true;
 }
 
-// volatile bool requestWiFi = false;
-
 static void wifiTask(void*) {
     bool rtc_sync = false;
-    config_param_t::net_setup_mode_t prev_net_setup_mode =
-        config_param_t::net_setup_mode_off;
+    config_param_t::net_wifi_mode_t prev_net_wifi_mode =
+        config_param_t::net_wifi_mode_off;
     bool prev_ap_connected  = false;
     bool prev_sta_connected = false;
     int connecting_retry    = 0;
@@ -3103,10 +2906,10 @@ static void wifiTask(void*) {
                 if (!draw_param.net_tmp_ssid.empty()) {
                     draw_param.net_tmp_ssid.clear();
                     draw_param.net_tmp_pwd.clear();
-                    if (draw_param.net_setup_mode !=
-                        draw_param.net_setup_mode_off) {
-                        draw_param.net_setup_mode =
-                            draw_param.net_setup_mode_off;
+                    if (draw_param.net_wifi_mode !=
+                        draw_param.net_wifi_mode_off) {
+                        draw_param.net_wifi_mode =
+                            draw_param.net_wifi_mode_off;
                         // qrcode_ui.hide();
                     }
                 }
@@ -3118,48 +2921,40 @@ static void wifiTask(void*) {
                 if (!rtc_sync) {
                     rtc_sync = sync_rtc_ntp();
                 }
-                if (0u == draw_param.cloud_ip) {
-                    WiFiGenericClass::hostByName(cloud_server_name,
-                                                 draw_param.cloud_ip);
-                }
             }
         }
 
-        if (prev_net_setup_mode != draw_param.net_setup_mode) {
+        if (prev_net_wifi_mode != draw_param.net_wifi_mode) {
             qrcode_ui.hide();
-            switch (prev_net_setup_mode) {
+            switch (prev_net_wifi_mode) {
                 default:
                     break;
 
-                case config_param_t::net_setup_mode_smartconfig:
-                    WiFi.stopSmartConfig();
+                case config_param_t::net_wifi_mode_connect_saved:
+                    WiFi.disconnect();
                     break;
 
-                case config_param_t::net_setup_mode_accesspoint:
+                case config_param_t::net_wifi_mode_accesspoint:
                     WiFi.scanDelete();
                     dnsServer.stop();
                     break;
             }
             prev_ap_connected = false;
 
-            prev_net_setup_mode = draw_param.net_setup_mode;
-            switch (prev_net_setup_mode) {
+            prev_net_wifi_mode = draw_param.net_wifi_mode;
+            switch (prev_net_wifi_mode) {
                 default:
-                case config_param_t::net_setup_mode_off:
+                case config_param_t::net_wifi_mode_off:
                     WiFi.mode((wifi_mode_t)(WiFi.getMode() &
                                             ~wifi_mode_t::WIFI_MODE_AP));
                     break;
 
-                case config_param_t::net_setup_mode_smartconfig:
-                    draw_param.net_running_mode =
-                        draw_param.net_running_mode_offline;
+                case config_param_t::net_wifi_mode_connect_saved:
                     WiFi.mode(wifi_mode_t::WIFI_MODE_STA);
-                    WiFi.beginSmartConfig();
+                    // Will trigger preset network connection attempt in next iteration
                     break;
 
-                case config_param_t::net_setup_mode_accesspoint:
-                    draw_param.net_running_mode =
-                        draw_param.net_running_mode_offline;
+                case config_param_t::net_wifi_mode_accesspoint:
                     WiFi.softAP(draw_param.net_apmode_ssid,
                                 draw_param.net_apmode_pass);
                     WiFi.softAPConfig(draw_param.net_apmode_ipaddr,
@@ -3176,50 +2971,29 @@ static void wifiTask(void*) {
             }
         }
 
-        if (prev_net_setup_mode != draw_param.net_setup_mode_off) {
-            switch (prev_net_setup_mode) {
-                case draw_param.net_setup_mode_accesspoint:
+        if (prev_net_wifi_mode != draw_param.net_wifi_mode_off) {
+            switch (prev_net_wifi_mode) {
+                case draw_param.net_wifi_mode_accesspoint:
                     dnsServer.processNextRequest();
                     if (prev_ap_connected != (bool)WiFi.softAPgetStationNum()) {
                         prev_ap_connected = !prev_ap_connected;
                         if (prev_ap_connected) {
                             soundWiFiConnected();
                             qrcode_ui.show(draw_param.net_ap_url.c_str());
-                            // qrcode_ui.show(draw_param.net_url.c_str());
                         } else {
                             qrcode_ui.hide();
                         }
                     }
                     break;
 
-                case draw_param.net_setup_mode_smartconfig:
-                    if (WiFi.smartConfigDone()) {
-                        draw_param.net_tmp_ssid.clear();
-                        draw_param.net_tmp_pwd.clear();
-                        if (draw_param.net_running_mode ==
-                            draw_param.net_running_mode_offline) {
-                            draw_param.net_running_mode =
-                                draw_param.net_running_mode_lan_cloud;
-                        }
-                        draw_param.net_setup_mode =
-                            draw_param.net_setup_mode_off;
-                    }
-                    continue;
+                case draw_param.net_wifi_mode_connect_saved:
+                    // Preset networks will be tried in the WiFi connection logic
+                    break;
 
                 default:
                     break;
             }
-
-            // requestWiFi = draw_param.net_running_mode !=
-            // draw_param.net_running_mode_offline;
         }
-
-        // {
-        //     int retry = 128;
-        //     do { delay(1); } while (((bool)draw_param.request_wifi_state) ==
-        //     WiFi.isConnected() && !need_wifi_reconnect && --retry); if (retry
-        //     == 0) { continue; }
-        // }
 
         if (!need_wifi_reconnect &&
             (((bool)draw_param.request_wifi_state) == WiFi.isConnected())) {
@@ -3228,8 +3002,8 @@ static void wifiTask(void*) {
 
         if ((need_wifi_reconnect || !((bool)draw_param.request_wifi_state))) {
             WiFi.disconnect(need_wifi_reconnect ||
-                            draw_param.net_setup_mode ==
-                                draw_param.net_setup_mode_off);
+                            draw_param.net_wifi_mode ==
+                                draw_param.net_wifi_mode_off);
             need_wifi_reconnect = false;
             // WiFi.mode(WIFI_MODE_NULL);
         } else {
@@ -3237,286 +3011,23 @@ static void wifiTask(void*) {
                 --connecting_retry;
             }
             if (connecting_retry == 0) {
-                if (!draw_param.net_tmp_ssid.empty()) {
-                    WiFi.begin(draw_param.net_tmp_ssid.c_str(),
-                               draw_param.net_tmp_pwd.c_str());
-                    connecting_retry = 64;
-                } else {
-                    WiFi.begin();
-                    connecting_retry = 512;
+                // Try preset networks: home -> work -> custom
+                bool connected = false;
+                for (int attempt = 0; attempt < 3; ++attempt) {
+                    int idx = (current_preset_idx + attempt) % 3;
+                    if (wifi_presets[idx].ssid[0] != 0) {
+                        WiFi.begin(wifi_presets[idx].ssid,
+                                   wifi_presets[idx].password);
+                        current_preset_idx = idx;
+                        connected = true;
+                        break;
+                    }
                 }
-                ESP_EARLY_LOGD("DEBUG", "WiFi begin() status:%d",
-                               WiFi.status());
+                connecting_retry = connected ? 64 : 512;
             }
         }
     }
 }
-
-static void cloudTask(void*) {
-    std::string json_frame;
-
-    static constexpr const int32_t prepare_sec = 3;
-
-    delay(1024);
-
-    time_t time_next_upload = 0;
-    time_t time_prev_upload = time(nullptr);
-    {
-        auto interval_sec =
-            config_param_t::cloud_interval_value[draw_param.cloud_interval];
-        time_prev_upload = (time_prev_upload / interval_sec) * interval_sec;
-    }
-
-    draw_param.cloud_status =
-        (draw_param.net_running_mode &
-         draw_param.net_running_mode_t::net_running_mode_cloud)
-            ? draw_param.cloud_status_t::cloud_timerwait
-            : draw_param.cloud_status_t::cloud_disable;
-    for (;;) {
-        delay(64);
-        if (!(draw_param.net_running_mode &
-              draw_param.net_running_mode_cloud)) {
-            if ((bool)(draw_param.request_wifi_state &
-                       draw_param_t::net_running_mode_cloud)) {
-                draw_param.request_wifi_state &=
-                    ~draw_param_t::net_running_mode_cloud;
-            }
-        } else {
-            switch (draw_param.cloud_status) {
-                default:
-                case draw_param.cloud_status_t::cloud_complete:
-                case draw_param.cloud_status_t::cloud_disable:
-                    draw_param.cloud_status =
-                        draw_param.cloud_status_t::cloud_timerwait;
-                    [[fallthrough]];
-                case draw_param.cloud_status_t::cloud_timerwait:
-
-                    // if (time_diff > prepare_sec) {
-                    //     if (!(draw_param.net_running_mode &
-                    //     draw_param.net_running_mode_lan)) { //
-                    //     次の送信までの秒数までの待ち時間が指定秒数以上あればWiFiを切断
-                    //         request_wifi = false;
-                    //     }
-                    // } else
-                    {
-                        auto t            = time(nullptr);
-                        auto interval_sec = config_param_t::cloud_interval_value
-                            [draw_param.cloud_interval];
-                        int32_t time_diff = (time_prev_upload - t);
-                        if (time_diff >= 0) {
-                            time_diff = 0;
-                        }
-                        time_diff += interval_sec;
-
-                        draw_param.cloud_countdown_sec =
-                            (0 <= time_diff) ? time_diff : 0;
-
-                        if (0 > time_diff) {
-                            draw_param.cloud_status =
-                                draw_param.cloud_status_t::cloud_connection;
-                            time_prev_upload =
-                                (t / interval_sec) * interval_sec;
-#if defined(ESP_LOGD)
-                            auto tm = localtime(&t);
-                            ESP_LOGD(
-                                "DEBUG",
-                                "upload time : %04d/%02d/%02d  %02d:%02d:%02d",
-                                tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday,
-                                tm->tm_hour, tm->tm_min, tm->tm_sec);
-
-                            tm = gmtime(&t);
-                            ESP_LOGD("DEBUG",
-                                     "gmt : %04d/%02d/%02d  %02d:%02d:%02d\n",
-                                     tm->tm_year + 1900, tm->tm_mon + 1,
-                                     tm->tm_mday, tm->tm_hour, tm->tm_min,
-                                     tm->tm_sec);
-#endif
-                            // ezdata_step = 1;
-
-                            // JSON生成中に別タスクの操作によってデータが変化する可能性があるため、ローカル変数にコピーしてから行う
-                            framedata_t frame = *draw_param.frame;
-
-                            // WiFi接続時の出力変動で画像が乱れる事があるため、フレームデータをローカルコピーした後でWiFi要求を行う。
-                            draw_param.request_wifi_state |=
-                                draw_param_t::net_running_mode_cloud;
-                            json_frame = "{ \"payload\": ";
-                            json_frame += frame.getJsonData();
-                            json_frame += "}\r\n";
-                        } else {
-                            if ((time_diff > prepare_sec) &&
-                                ((bool)(draw_param.request_wifi_state &
-                                        draw_param_t::
-                                            net_running_mode_cloud))) {
-                                draw_param.request_wifi_state &=
-                                    ~draw_param_t::net_running_mode_cloud;
-                            }
-                            delay(64);
-                        }
-                    }
-                    break;
-
-                case draw_param.cloud_status_t::cloud_error:
-                case draw_param.cloud_status_t::cloud_connection:
-                case draw_param.cloud_status_t::cloud_uploading:
-                    if (WiFi.isConnected() && 0u != draw_param.cloud_ip) {
-                        /*
-                                            static constexpr const char* host =
-                        "http://ezdata.m5stack.com/api/M5StickT-Lite-Data/";
-
-                                            HTTPClient http_client;
-                                            // http_client.setReuse(false);
-                                            uint_fast16_t timeout = 4096;
-                                            do {
-                                                http_client.setTimeout(timeout);
-                                                if (http_client.begin(host)) {
-                                                    http_client.addHeader("Content-Type",
-                        "application/json");
-                                                    // Send HTTP POST request
-                                                    draw_param.cloud_status =
-                        draw_param.cloud_status_t::cloud_uploading; int
-                        httpResponseCode =
-                        http_client.POST((uint8_t*)json_frame.c_str(),
-                        json_frame.length()); http_client.end();
-                                                    if(httpResponseCode ==
-                        HTTP_CODE_OK){ soundCloudSuccess();
-                                                        draw_param.cloud_status
-                        = draw_param.cloud_status_t::cloud_complete;
-                                                        ESP_LOGD("DEBUG",
-                        "Success upload data to ezdata"); break; } else {
-                                                        soundCloudError();
-                                                        draw_param.cloud_status
-                        = draw_param.cloud_status_t::cloud_error;
-                                                        ESP_LOGD("DEBUG", "Fail
-                        to upload data,response code:%d\n",httpResponseCode);
-                        draw_param.cloud_status =
-                        draw_param.cloud_status_t::cloud_complete; break;
-                                                    }
-                                                }
-                                                timeout = timeout * 3 >> 1;
-                                            } while (timeout <= 8192);
-                        //*/
-                        WiFiClient wifi_client;
-                        // ESP_EARLY_LOGD("DEBUG","CLOUD 1");
-                        if (1 == wifi_client.connect(draw_param.cloud_ip, 80,
-                                                     6144)) {
-                            wifi_client.setTimeout(5);
-                            wifi_client.setNoDelay(true);
-                            // ESP_EARLY_LOGD("DEBUG","CLOUD 2");
-                            draw_param.cloud_status =
-                                draw_param.cloud_status_t::cloud_uploading;
-                            wifi_client.print(
-                                "POST /api/M5StickT-Lite-Data/ HTTP/1.1\r\n"
-                                "Accept: */*\r\n"
-                                "Connection: keep-alive\r\n"
-                                "Content-Type: application/json; "
-                                "charset=utf-8\r\n"
-                                "DNT: 1\r\n"
-                                "Origin: null\r\n"
-                                "User-Agent: ESP32\r\n");
-                            wifi_client.printf(
-                                "Host: %s:80\r\nContent-Length: %d\r\n\r\n",
-                                cloud_server_name, json_frame.length());
-                            // ESP_EARLY_LOGD("DEBUG","CLOUD 3");
-                            size_t len = json_frame.length();
-                            auto p     = json_frame.c_str();
-                            do {
-                                size_t l = 1436 < len ? 1436 : len;
-                                if (l != wifi_client.write(p, l)) {
-                                    break;
-                                }
-                                // ESP_EARLY_LOGD("DEBUG","remain:%d", len);
-                                p += l;
-                                len -= l;
-                            } while (len);
-                            // if (wifi_client.write(json_frame.c_str(),
-                            // json_frame.length()) == json_frame.length()) {
-                            if (len) {
-                                draw_param.cloud_status =
-                                    draw_param.cloud_status_t::cloud_error;
-                                soundCloudError();
-                            } else {
-                                // ESP_EARLY_LOGD("DEBUG","CLOUD 4");
-                                wifi_client.print("\r\n\r\n");
-                                bool success = false;
-                                std::string linebuf;
-                                int retry = 2048;
-                                // ESP_EARLY_LOGD("DEBUG","CLOUD 5");
-                                do {
-                                    delay(1);
-                                } while (wifi_client.connected() &&
-                                         wifi_client.available() == 0 &&
-                                         --retry >= 0);
-                                if (wifi_client.connected()) {
-                                    if (retry >= 0) {
-                                        wifi_client.print("\r\n");
-                                    }
-                                    retry = 2048;
-                                    do {
-                                        delay(1);
-                                        int c;
-                                        while (0 <= (c = wifi_client.read())) {
-                                            if (c == '\r') {
-                                                continue;
-                                            }
-                                            if (c != '\n') {
-                                                linebuf.append(1, (char)c);
-                                                ++retry;
-                                            } else {
-                                                if (linebuf.size() == 0) {
-                                                    retry = 0;
-                                                    break;
-                                                }
-                                                // ESP_EARLY_LOGD("DEBUG", "%s",
-                                                // linebuf.c_str());
-                                                if (linebuf.compare(
-                                                        "HTTP/1.1 200 OK") ==
-                                                    0) {
-                                                    // ESP_EARLY_LOGD("DEBUG",
-                                                    // "upload success",
-                                                    // linebuf.c_str());
-                                                    success = true;
-                                                }
-                                                linebuf.clear();
-                                            }
-                                        }
-                                    } while (wifi_client.connected() &&
-                                             --retry >= 0);
-                                }
-                                if (success) {
-                                    draw_param.cloud_status =
-                                        draw_param
-                                            .cloud_status_t::cloud_complete;
-                                    soundCloudSuccess();
-                                } else {
-                                    draw_param.cloud_status =
-                                        draw_param.cloud_status_t::cloud_error;
-                                    soundCloudError();
-                                }
-                            }
-                            wifi_client.stop();
-                        }
-                    }
-                    //*/
-
-                    break;
-            }
-        }
-    }
-}
-
-/*
-void connect_ezdata(void) {
-    if (draw_param.oncloud_conf_valid) {
-        if (setupWifi(str_ssid.c_str(), str_pass.c_str())) {
-            int value = 0;
-            getData(str_token.c_str(), "testData", value);
-
-            if (setData(str_token.c_str(), "testData", ++value)) {
-            }
-        }
-    }
-}
-*/
 
 void setup(void) {
     // 最大の連続メモリ領域を後に残すため、敢えてここで確保しておき、準備が終わった後に解放する。
@@ -3527,8 +3038,6 @@ void setup(void) {
     M5.begin();
     M5.BtnPWR.setHoldThresh(1024);
     display.setRotation(1);
-    display.drawBmp(bmp_logo, sizeof(bmp_logo), 0, 0, display.width(),
-                    display.height(), 0, 0, 1.0f, 1.0f, datum_t::middle_center);
 
     {
         auto cfg             = M5.Speaker.config();
@@ -3556,6 +3065,10 @@ void setup(void) {
     //*/
 
     command_processor::setup();
+    
+    // Initialize font (was previously set via misc_language_func)
+    draw_param.setFont(&fonts::Font2);
+    
     for (int i = 0; i < 4; ++i) {
         draw_param.graph_data.temp_arrays[i] = (uint16_t*)malloc(
             draw_param.graph_data.data_len * sizeof(uint16_t));
@@ -3575,9 +3088,9 @@ void setup(void) {
     auto macaddr = draw_param.macaddr;
     esp_read_mac(macaddr, ESP_MAC_WIFI_SOFTAP);
     snprintf(draw_param.net_apmode_ssid, sizeof(draw_param.net_apmode_ssid),
-             "T-Lite_%02x%02x", macaddr[4], macaddr[5]);
+             "Thermal Camera");
 
-    draw_param.net_hostname = draw_param.net_apmode_ssid;
+    draw_param.net_hostname = "Thermal Camera";
     draw_param.net_hostname += ".local";
 
     char cbuf[32];
@@ -3589,8 +3102,6 @@ void setup(void) {
         cbuf[i] = '0' + (mi % 10);
         mi >>= 4ull;
     }
-    cbuf[4]                = '\0';
-    draw_param.cloud_token = cbuf;
 
     draw_param.net_url_mdns = "http://";
     draw_param.net_url_mdns += draw_param.net_hostname;
@@ -3602,11 +3113,6 @@ void setup(void) {
     // draw_param.net_apmode_ipaddr.toString().c_str()); draw_param.net_ap_url =
     // cbuf;
     draw_param.net_ap_url = draw_param.net_url_mdns + "wifi";
-
-    snprintf(cbuf, sizeof(cbuf), "%02x%02x%02x%02x%02x%02x", macaddr[0],
-             macaddr[1], macaddr[2], macaddr[3], macaddr[4], macaddr[5]);
-    draw_param.cloud_url = "https://T-Lite.m5stack.com/";
-    draw_param.cloud_url += cbuf;
 
     draw_param.loadNvs();
 
@@ -3646,50 +3152,7 @@ void setup(void) {
                             PRO_CPU_NUM);
     delay(512);
 
-    {
-        static constexpr size_t line_len = 64;
-        char lines[6][line_len]          = {""};
-        snprintf(lines[0], line_len, "ver:%d.%d.%d", firmware_ver_major,
-                 firmware_ver_minor, firmware_ver_patch);
-        size_t line_idx = 1;
-        snprintf(lines[line_idx++], line_len, "Sensor:%s/%d%%",
-                 draw_param.sens_refreshrate.getText(),
-                 draw_param.sens_emissivity.get());
-        if (draw_param.net_running_mode & draw_param.net_running_mode_cloud) {
-            snprintf(lines[line_idx++], line_len, "Mode:%s(%s)",
-                     draw_param.net_running_mode.getText(),
-                     draw_param.cloud_interval.getText());
-        } else {
-            snprintf(lines[line_idx++], line_len, "Mode:%s",
-                     draw_param.net_running_mode.getText());
-        }
-        if (draw_param.alarm_mode) {
-            snprintf(lines[line_idx++], line_len, "Alarm:%s %3.1fC",
-                     draw_param.alarm_mode.getText(),
-                     convertRawToCelsius(draw_param.alarm_temperature));
-        } else {
-            snprintf(lines[line_idx++], line_len, "Alarm:%s",
-                     draw_param.alarm_reference.getText());
-        }
-
-        if (draw_param.sys_ssid.length()) {
-            snprintf(lines[line_idx++], line_len, "WiFi:%s",
-                     draw_param.sys_ssid.c_str());
-        } else {
-            snprintf(lines[line_idx++], line_len, "WiFi: -- unset --");
-        }
-        snprintf(lines[line_idx++], line_len, "MAC:%02x%02x%02x%02x%02x%02x",
-                 macaddr[0], macaddr[1], macaddr[2], macaddr[3], macaddr[4],
-                 macaddr[5]);
-
-        // overlay_ui.setClientRect({ display.width() >> 1, display.height() >>
-        // 1, 0, 0});
-        overlay_ui.show(128, lines[0], lines[1], lines[2], lines[3], lines[4],
-                        lines[5]);
-    }
-
-    xTaskCreatePinnedToCore(cloudTask, "cloudTask", 8192, nullptr, 3, nullptr,
-                            APP_CPU_NUM);
+    // Cloud functionality has been removed
 
     // debug
     // pinMode(GPIO_NUM_32, OUTPUT);
@@ -4128,18 +3591,13 @@ std::string framedata_t::getJsonData(void) const {
     std::string result;
     result.reserve(768 * 6 + 512);
     result.append(cbuf,
-                  snprintf(cbuf, sizeof(cbuf), "{\r\n \"pwd\": \"%s\",\r\n",
-                           draw_param.cloud_token.c_str()));
+                  snprintf(cbuf, sizeof(cbuf), "{\r\n"));
     result.append(
         cbuf,
         snprintf(cbuf, sizeof(cbuf),
                  " \"datetime\": \"%s, %d %s %04d %02d:%02d:%02d GMT\",\r\n",
                  wday_tbl[gmt->tm_wday], gmt->tm_mday, mon_tbl[gmt->tm_mon],
                  gmt->tm_year + 1900, gmt->tm_hour, gmt->tm_min, gmt->tm_sec));
-    result.append(
-        cbuf,
-        snprintf(cbuf, sizeof(cbuf), " \"interval\": %d,\r\n",
-                 draw_param.cloud_interval_value[draw_param.cloud_interval]));
 
     auto macaddr = draw_param.macaddr;
     result.append(
@@ -4162,8 +3620,6 @@ std::string framedata_t::getJsonData(void) const {
                                      convertRawToCelsius(pixel_raw[i])));
     }
     result += "]\r\n}\r\n";
-
-    // ESP_LOGE("DEBUG","JSON CREATE:%d usec", micros() - usec);
 
     return result;
 }

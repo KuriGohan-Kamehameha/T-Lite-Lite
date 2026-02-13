@@ -606,12 +606,12 @@ struct single_text_t : public itext_t {
 
 struct localize_text_t : public itext_t {
     static uint8_t localize_index;
-    const char* texts[3];
-    constexpr localize_text_t(const char* t1, const char* t2, const char* t3)
-        : texts{t1, t2, t3} {
+    const char* text;
+    constexpr localize_text_t(const char* t1)
+        : text{t1} {
     }
     const char* get(void) const override {
-        return texts[localize_index];
+        return text;
     }
 };
 
@@ -815,30 +815,12 @@ struct config_param_t {
 
     static constexpr const char* common_off_on_text[] = {"Off", "On"};
 
-    enum net_running_mode_t {
-        net_running_mode_offline,    // 0
-        net_running_mode_cloud,      // 1
-        net_running_mode_lan,        // 2
-        net_running_mode_lan_cloud,  // 3
-        net_running_mode_max,
+    enum net_wifi_mode_t {
+        net_wifi_mode_off,            // 0 - WiFi completely off
+        net_wifi_mode_connect_saved,  // 1 - Connect to saved networks
+        net_wifi_mode_accesspoint,    // 2 - Access point mode
+        net_wifi_mode_max,
     };
-    // static constexpr const localize_text_t net_running_mode_text[] =
-    // { { "Offline"     , "离线"     , "オフライン"  },
-    //   { "Cloud Online", "云监控"   , "クラウド"    },
-    //   { "LAN"         , "局域网"   , "LAN"         },
-    //   { "LAN+Cloud"   , "局域网+云", "LAN+クラウド"},
-    // };
-
-    enum net_setup_mode_t {
-        net_setup_mode_off,
-        net_setup_mode_smartconfig,
-        net_setup_mode_accesspoint,
-        // net_wifi_mode_keep_connect,
-        // net_wifi_mode_uploading,
-        net_setup_mode_max,
-    };
-    // static constexpr const char* net_setup_mode_text[] = { "Off", "ESP TOUCH
-    // APP", "AP mode", "Keep connection", "OnCloud only" };
 
     enum alarm_mode_t {
         alarm_mode_off,
@@ -935,21 +917,6 @@ struct config_param_t {
     // "High" };
     static constexpr const uint8_t misc_brightness_value[] = {63, 100, 200};
 
-    enum misc_language_t {
-        misc_language_en,
-        misc_language_cn,
-        misc_language_ja,
-        misc_language_max,
-    };
-    static constexpr const char* misc_language_text[] = {"English", "中文",
-                                                         "日本語"};
-    // static constexpr const lgfx::IFont* misc_language_value[] = {
-    // &fonts::DejaVu12, &fonts::DejaVu18, &fonts::DejaVu24 }; static constexpr
-    // const lgfx::IFont* misc_language_value[] = { &fonts::efontJA_14,
-    // &fonts::efontJA_16, &fonts::efontJA_24 };
-    static constexpr const lgfx::IFont* misc_language_value[] = {
-        &fonts::efontCN_24, &fonts::efontCN_24, &fonts::efontJA_24};
-
     enum misc_pointer_t {
         misc_pointer_off,
         misc_pointer_point,
@@ -984,20 +951,7 @@ struct config_param_t {
         misc_color_max,
     };
 
-    enum cloud_interval_t {
-        cloud_interval_5sec,
-        cloud_interval_10sec,
-        cloud_interval_30sec,
-        cloud_interval_60sec,
-        cloud_interval_120sec,
-        cloud_interval_300sec,
-        cloud_interval_600sec,
-        cloud_interval_1800sec,
-        cloud_interval_3600sec,
-        cloud_interval_max,
-    };
-    static constexpr const uint16_t cloud_interval_value[] = {
-        5, 10, 30, 60, 120, 300, 600, 1800, 3600};
+    // cloud_interval_t removed
 
     static void alarm_temperature_text_func(char* text_buf, size_t buf_len,
                                             uint16_t v) {
@@ -1020,13 +974,7 @@ struct config_param_t {
 
     static void misc_backtofactory_text_func(char* text_buf, size_t buf_len,
                                              uint8_t v) {
-        static constexpr const char* text = "Enter To Reset";
-        text_buf                          = strcpy(text_buf, text);
-    }
-
-    static void misc_staff_text_func(char* text_buf, size_t buf_len,
-                                     uint8_t v) {
-        static constexpr const char* text = "View Info";
+        static constexpr const char* text = "Reset to Defaults";
         text_buf                          = strcpy(text_buf, text);
     }
 
@@ -1037,7 +985,7 @@ struct config_param_t {
     const IPAddress net_apmode_ipaddr{192, 168, 4, 1};
     const IPAddress net_apmode_subnet{255, 255, 255, 0};
 
-    static void net_running_mode_func(net_running_mode_t);
+    static void net_wifi_mode_func(net_wifi_mode_t);
     static void misc_cpuspeed_func(misc_cpuspeed_t);
     static void sens_refreshrate_func(sens_refreshrate_t);
     static void sens_noisefilter_func(sens_noisefilter_t);
@@ -1045,109 +993,83 @@ struct config_param_t {
     static void range_temperature_func(int32_t);
     // static void net_wifi_mode_func(net_wifi_mode_t);
     static void misc_brightness_func(misc_brightness_t);
-    static void misc_language_func(misc_language_t);
     static void misc_volume_func(misc_volume_t);
     static void misc_color_func(misc_color_t v);
     static void misc_backtofactory_func(uint8_t);
 
-    config_property_localize_enum_t<net_running_mode_t> net_running_mode = {
-        {"Running Mode", "运行模式", "動作モード"},
+    config_property_localize_enum_t<net_wifi_mode_t> net_wifi_mode = {
+        {"WiFi"},
         (const localize_text_t[]){
-            {"Offline", "离线", "オフライン"},
-            {"Cloud Online", "云监控", "クラウド"},
-            {"LAN", "局域网", "LAN"},
-            {"LAN+Cloud", "局域网+云", "LAN+クラウド"},
+            {"Off"},
+            {"Connect Saved"},
+            {"AP Mode"},
         },
-        net_running_mode_t::net_running_mode_offline,
-        net_running_mode_t::net_running_mode_max,
-        net_running_mode_func};
+        net_wifi_mode_t::net_wifi_mode_off,
+        net_wifi_mode_t::net_wifi_mode_max,
+        net_wifi_mode_func};
 
-    config_property_localize_enum_t<net_setup_mode_t> net_setup_mode = {
-        {"WiFi Setting", "WiFi设置", "WiFi設定"},
-        (const localize_text_t[]){
-            {"Off", "关闭AP", "オフ"},
-            {"ESP TOUCH APP", "通过ESP TOUCH APP配置", "ESP TOUCHアプリ"},
-            {"AP mode", "连接本机AP热点", "アクセスポイントモード"},
-        },
-        net_setup_mode_t ::net_setup_mode_off,
-        net_setup_mode_t ::net_setup_mode_max};
-
-    config_property_localize_enum_t<cloud_interval_t> cloud_interval = {
-        {"Upload Interval", "上传间隔时间", "アップロード間隔"},
-        (const localize_text_t[]){
-            {"5Sec", "5秒", "5秒"},
-            {"10Sec", "10秒", "10秒"},
-            {"30Sec", "30秒", "30秒"},
-            {"1Min", "1分", "1分"},
-            {"2Min", "2分", "2分"},
-            {"5Min", "5分", "5分"},
-            {"10Min", "10分", "10分"},
-            {"30Min", "30分", "30分"},
-            {"1Hour", "1小时", "1時間"},
-        },
-        cloud_interval_t ::cloud_interval_30sec,
-        cloud_interval_t ::cloud_interval_max};
+    // Cloud interval removed
 
     config_property_value_t<uint16_t> alarm_temperature = {
         alarm_temperature_text_func, (100 + 64) * 128, (-50 + 64) * 128,
         (350 + 64) * 128, 32};
 
     config_property_localize_enum_t<alarm_mode_t> alarm_mode = {
-        {"Alarm Mode", "报警触发条件", "アラーム条件"},
+        {"Alarm Mode"},
         (const localize_text_t[]){
-            {"Disable", "关闭报警", "無効"},
-            {"Lower", "低于设定", "低温時"},
-            {"Higher", "高于设定", "高温時"},
+            {"Off"},
+            {"Lower"},
+            {"Higher"},
         },
         alarm_mode_t ::alarm_mode_hightemp,
         alarm_mode_t ::alarm_mode_max};
 
     config_property_localize_enum_t<alarm_reference_t> alarm_reference = {
-        {"Reference", "触发范围", "参照温度"},
+        {"Reference"},
         (const localize_text_t[]){
-            {"Highest", "最高温度", "最高温度"},
-            {"Lowest", "最低温度", "最低温度"},
-            {"Center", "中央温度", "中央温度"},
-            {"Average", "平均温度", "平均温度"},
+            {"Highest"},
+            {"Lowest"},
+            {"Center"},
+            {"Average"},
         },
         alarm_reference_t ::alarm_reference_highest,
         alarm_reference_t ::alarm_reference_max};
 
     config_property_localize_enum_t<sens_refreshrate_t> sens_refreshrate = {
-        {"Refresh Rate", "刷新速度", "更新レート"},
+        {"Refresh Rate"},
         (const localize_text_t[]){
-            {"0.5Hz", "0.5Hz", "0.5Hz"},
-            {"1Hz", "1Hz", "1Hz"},
-            {"2Hz", "2Hz", "2Hz"},
-            {"4Hz", "4Hz", "4Hz"},
-            {"8Hz", "8Hz", "8Hz"},
-            {"16Hz", "16Hz", "16Hz"},
-            {"32Hz", "32Hz", "32Hz"},
+            {"0.5Hz"},
+            {"1Hz"},
+            {"2Hz"},
+            {"4Hz"},
+            {"8Hz"},
+            {"16Hz"},
+            {"32Hz"},
         },
         sens_refreshrate_t::sens_refreshrate_16,
         sens_refreshrate_t::sens_refreshrate_max,
         sens_refreshrate_func};
 
     config_property_localize_enum_t<sens_noisefilter_t> sens_noisefilter = {
-        {"Noise Filter", "噪点过滤", "ノイズフィルタ"},
+        {"Noise Filter"},
         (const localize_text_t[]){
-            {"Off", "关闭", "無効"},
-            {"Weak", "轻微", "弱"},
-            {"Medium", "中等", "中"},
-            {"Strong", "强", "強"},
+            {"Off"},
+            {"Weak"},
+            {"Medium"},
+            {"Strong"},
         },
         sens_noisefilter_t::sens_noisefilter_medium,
         sens_noisefilter_t::sens_noisefilter_max,
         sens_noisefilter_func};
 
     config_property_localize_enum_t<sens_monitorarea_t> sens_monitorarea = {
-        {"Monitor Area", "监视区", "監視エリア"},
+        {"Monitor Area"},
         (const localize_text_t[]){
-            {"16x16", "16x16", "16x16"},
-            {"20x20", "20x20", "20x20"},
-            {"24x24", "24x24", "24x24"},
-            {"28x24", "28x24", "28x24"},
-            {"30x24", "30x24", "30x24"},
+            {"16x16"},
+            {"20x20"},
+            {"24x24"},
+            {"28x24"},
+            {"30x24"},
         },
         sens_monitorarea_t::sens_monitorarea_30x24,
         sens_monitorarea_t::sens_monitorarea_max};
@@ -1156,10 +1078,10 @@ struct config_param_t {
         perf_emissivity_text_func, 98, 20, 100, 1, perf_emissivity_func};
 
     config_property_localize_enum_t<range_autoswitch_t> range_autoswitch = {
-        {"Auto Range", "自动量程", "自動レンジ"},
+        {"Auto Range"},
         (const localize_text_t[]){
-            {"Off", "关闭", "無効"},
-            {"On", "打开", "有効"},
+            {"Off"},
+            {"On"},
         },
         range_autoswitch_t::range_autoswitch_on,
         range_autoswitch_t::range_autoswitch_max};
@@ -1181,88 +1103,70 @@ struct config_param_t {
         range_temperature_func};
 
     config_property_localize_enum_t<misc_cpuspeed_t> misc_cpuspeed = {
-        {"CPU Clock", "CPU 主频", "CPU周波数"},
+        {"CPU Speed"},
         (const localize_text_t[]){
-            {"80MHz", "80MHz", "80MHz"},
-            {"160MHz", "160MHz", "160MHz"},
-            {"240MHz", "240MHz", "240MHz"},
+            {"80MHz"},
+            {"160MHz"},
+            {"240MHz"},
         },
         misc_cpuspeed_t ::misc_cpuspeed_160,
         misc_cpuspeed_t ::misc_cpuspeed_max,
         misc_cpuspeed_func};
 
     config_property_localize_enum_t<misc_volume_t> misc_volume = {
-        {"Sound Volume", "蜂鸣器音量", "ブザー音量"},
+        {"Volume"},
         (const localize_text_t[]){
-            {"Mute", "关闭", "無音"},
-            {"Small", "小", "小"},
-            {"Normal", "正常", "標準"},
+            {"Mute"},
+            {"Low"},
+            {"High"},
         },
         misc_volume_t ::misc_volume_normal,
         misc_volume_t ::misc_volume_max,
         misc_volume_func};
 
     config_property_localize_enum_t<misc_brightness_t> misc_brightness = {
-        {"LCD Brightness", "屏幕亮度", "画面の明るさ"},
+        {"LCD Brightness"},
         (const localize_text_t[]){
-            {"Low", "暗", "低輝度"},
-            {"Middle", "中等", "標準"},
-            {"High", "亮", "高輝度"},
+            {"Low"},
+            {"Medium"},
+            {"High"},
         },
         misc_brightness_t ::misc_brightness_middle,
         misc_brightness_t ::misc_brightness_max,
         misc_brightness_func};
 
     config_property_localize_enum_t<misc_pointer_t> misc_pointer = {
-        {"Pointer", "光标", "ポインタ"},
+        {"Pointer"},
         (const localize_text_t[]){
-            {"Off", "关闭", "無し"},
-            {"Point", "点", "点"},
-            {"Point+Value", "点+数值", "点+値"},
+            {"Off"},
+            {"Point"},
+            {"Point & Value"},
         },
         misc_pointer_t ::misc_pointer_pointtxt,
         misc_pointer_t ::misc_pointer_max};
 
     config_property_localize_enum_t<misc_color_t> misc_color = {
-        {"Color", "色样", "色"},
+        {"Color"},
         (const localize_text_t[]){
-            {"Golden", "金色", "金色"},
-            {"Rainbow", "彩虹", "虹色"},
-            {"Grayscale", "灰度", "グレー"},
-            {"IronBlack", "铁黑", "黒鉄"},
-            {"Cam", "摄像头", "カメラ"},
+            {"Golden"},
+            {"Rainbow"},
+            {"Grayscale"},
+            {"IronBlack"},
+            {"Cam"},
         },
         misc_color_t ::misc_color_golden,
         misc_color_t ::misc_color_max,
         misc_color_func};
 
-    config_property_localize_enum_t<misc_language_t> misc_language = {
-        {"Language", "Language", "Language"},
-        (const localize_text_t[]){
-            {"English", "英文", "英語"},
-            {"Chinise", "中文", "中国語"},
-            {"Japanese", "日文", "日本語"},
-        },
-        misc_language_t ::misc_language_en,
-        misc_language_t ::misc_language_max,
-        misc_language_func};
-
-    // config_property_enum_t<misc_language_t>    misc_language     = {
-    // misc_language_text          , misc_language_t   ::misc_language_en ,
-    // misc_language_t   ::misc_language_max, misc_language_func };
     config_property_value_t<uint8_t> net_jpg_quality = {uint8_t_text_func, 60,
-                                                        1, 100, 1};
+                                                         1, 100, 1};
     config_property_value_t<uint8_t> misc_layout     = {uint8_t_text_func, 1, 0,
-                                                    255, 1};
+                                                         255, 1};
     config_property_value_t<uint8_t> misc_backtofactory = {
         misc_backtofactory_text_func, 0, 0, 0, 0, misc_backtofactory_func};
-    config_property_value_t<uint8_t> misc_staff = {misc_staff_text_func, 0, 0,
-                                                   1, 1};
     // config_property_enum_t<cloud_upload_t>     cloud_upload      = {
     // common_off_on_text          , cloud_upload_t    ::cloud_upload_off ,
     // cloud_upload_t    ::cloud_upload_max };
-
-    std::string cloud_token;
 
     int32_t oncloud_timezone_sec;
     // uint16_t oncloud_interval = 30;
@@ -1303,17 +1207,7 @@ struct draw_param_t : public config_param_t {
     bool oncloud_conf_valid = false;
     uint8_t macaddr[8];
 
-    enum cloud_status_t {
-        cloud_disable,
-        cloud_timerwait,
-        cloud_connection,
-        cloud_uploading,
-        cloud_complete,
-        cloud_error,
-    };
-    cloud_status_t cloud_status;
-
-    uint16_t cloud_countdown_sec = 0;  // アップロードまでの残り秒数
+    // cloud_status removed
     std::string sys_ssid;              // 利用するSSID
     std::string net_tmp_ssid;  // APモードで設定のために一時的に利用するSSID
     std::string
@@ -1322,8 +1216,6 @@ struct draw_param_t : public config_param_t {
     std::string net_url_mdns;  // mDNS名アクセス用URL
     std::string net_url_ip;    // mDNS名アクセス用URL
     std::string net_hostname;  // T-Lite_xxxx.local
-    std::string cloud_url;
-    IPAddress cloud_ip;
 
    protected:
     const framedata_t* _frame_array;
