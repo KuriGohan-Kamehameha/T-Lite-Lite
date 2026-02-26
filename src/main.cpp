@@ -3271,8 +3271,9 @@ static void wifiTask(void*) {
             switch (prev_net_wifi_mode) {
                 default:
                 case config_param_t::net_wifi_mode_off:
-                    WiFi.mode((wifi_mode_t)(WiFi.getMode() &
-                                            ~wifi_mode_t::WIFI_MODE_AP));
+                    // Fully power down WiFi radio when mode is OFF.
+                    WiFi.disconnect(true);
+                    WiFi.mode(WIFI_OFF);
                     break;
 
                 case config_param_t::net_wifi_mode_connect_saved:
@@ -3458,8 +3459,11 @@ void setup(void) {
 
     draw_param.loadNvs();
 
-    // Default to offline mode on boot as requested
-    draw_param.net_wifi_mode = config_param_t::net_wifi_mode_off;
+    // Always start offline on boot regardless of persisted network mode.
+    draw_param.net_wifi_mode      = config_param_t::net_wifi_mode_off;
+    draw_param.request_wifi_state = 0;
+    need_wifi_reconnect           = false;
+    WiFi.disconnect(true);
     WiFi.mode(WIFI_OFF);
 
     display.setBrightness(
@@ -3714,12 +3718,11 @@ void loop(void) {
     // **SENTRY MODE HANDLING**
     if (sentry_active && !prev_sentry_active) {
 #if !defined(WIFI_DISABLED)
-        if (draw_param.net_wifi_mode ==
+        // Respect offline-on-boot policy: sentry does not force-enable WiFi.
+        if (draw_param.net_wifi_mode !=
             draw_param.net_wifi_mode_t::net_wifi_mode_off) {
-            draw_param.net_wifi_mode =
-                config_param_t::net_wifi_mode_connect_saved;
+            need_wifi_reconnect = true;
         }
-        need_wifi_reconnect = true;
 #endif
         sentry_data.last_report_time = 0;
         web_ui_last_activity_millis  = millis();
