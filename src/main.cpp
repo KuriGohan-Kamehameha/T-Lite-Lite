@@ -191,6 +191,18 @@ static void update_orientation_awareness(draw_param_t* param) {
     static float filtered_ay                 = 0.0f;
     static float filtered_az                 = 1.0f;
     static bool filter_initialized           = false;
+    auto clamp_menu_orientation = [param](ui_orientation_t orientation) {
+        if (!param->in_config_mode) {
+            return orientation;
+        }
+        if (orientation == ui_orientation_t::portrait_ccw ||
+            orientation == ui_orientation_t::portrait_cw) {
+            return (param->display_rotation == 3)
+                       ? ui_orientation_t::landscape_180
+                       : ui_orientation_t::landscape_0;
+        }
+        return orientation;
+    };
 
     const uint32_t now = millis();
     if (now < next_orientation_read_ms) {
@@ -231,14 +243,16 @@ static void update_orientation_awareness(draw_param_t* param) {
 
     if (!initialized) {
         initialized = true;
-        stable = candidate = detect_orientation(filtered_ax, filtered_ay,
-                                                ui_orientation_t::landscape_0);
+        stable = candidate = clamp_menu_orientation(
+            detect_orientation(filtered_ax, filtered_ay,
+                               ui_orientation_t::landscape_0));
         apply_orientation(param, stable);
         last_apply_ms = now;
         return;
     }
 
-    auto detected = detect_orientation(filtered_ax, filtered_ay, stable);
+    auto detected =
+        clamp_menu_orientation(detect_orientation(filtered_ax, filtered_ay, stable));
     if (detected != candidate) {
         candidate              = detected;
         candidate_stable_count = 0;
