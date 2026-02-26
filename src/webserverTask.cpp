@@ -24,6 +24,8 @@ static constexpr const char HTTP_200_json[] =
     "HTTP/1.1 200 OK\nContent-Type: application/json; "
     "charset=UTF-8\nX-Content-Type-Options: nosniff\nConnection: "
     "keep-alive\nCache-Control: no-cache\n\n";
+static constexpr size_t kMaxHttpLineLength = 512;
+static constexpr size_t kMaxPostBodyLength = 255;
 static constexpr const char HTML_footer[] =
     "<div class='ft'>Copyright &copy;2022" 
     "</div></div>\n</body></html>\n\n";
@@ -127,6 +129,34 @@ static size_t decode_uri(char* dest, const char* src, size_t bufsiz) {
     }
     dest[current] = 0;
     return current;
+}
+
+static void read_request_post_body(WiFiClient* client,
+                                   std::string* request_post) {
+    request_post->clear();
+    char buffer[kMaxPostBodyLength + 1] = {0};
+    int len                              = 0;
+    int retry                            = 256;
+    do {
+        delay(1);
+        len = client->available();
+    } while (len == 0 && --retry);
+
+    if (len <= 0) {
+        return;
+    }
+
+    int read_len = len;
+    if (read_len > static_cast<int>(kMaxPostBodyLength)) {
+        read_len = static_cast<int>(kMaxPostBodyLength);
+    }
+    size_t actually_read = client->readBytes(buffer, read_len);
+    request_post->assign(buffer, actually_read);
+
+    // Drain any leftover bytes to avoid poisoning the next request parse.
+    while (client->available() > 0) {
+        client->read();
+    }
 }
 
 static void redirect_header(WiFiClient* client, const char* path) {
@@ -593,7 +623,8 @@ input[type=range]{padding:0;height:32px}
 
     client->print(
         "HTTP/1.1 200 OK\nContent-Type: text/html\nConnection: keep-alive\n");
-    client->printf("Content-Length: %d\n\n", strbuf.size());
+    client->printf("Content-Length: %u\n\n",
+                   static_cast<unsigned>(strbuf.size()));
     client->write(strbuf.c_str(), strbuf.size());
     return true;
 }
@@ -756,7 +787,8 @@ static bool response_param(draw_param_t* draw_param, connection_t* conn) {
         "HTTP/1.1 200 OK\nContent-Type: application/json; "
         "charset=UTF-8\nX-Content-Type-Options: nosniff\nConnection: "
         "keep-alive\nCache-Control: no-cache\n");
-    client->printf("Content-Length: %d\n\n", strbuf.size());
+    client->printf("Content-Length: %u\n\n",
+                   static_cast<unsigned>(strbuf.size()));
     client->write(strbuf.c_str(), strbuf.size());
     client->print("\n");
     return true;
@@ -790,7 +822,8 @@ static bool response_json(draw_param_t* draw_param, connection_t* conn) {
         "HTTP/1.1 200 OK\nContent-Type: application/json; "
         "charset=UTF-8\nX-Content-Type-Options: nosniff\nConnection: "
         "keep-alive\nCache-Control: no-cache\n");
-    client->printf("Content-Length: %d\n\n", strbuf.size());
+    client->printf("Content-Length: %u\n\n",
+                   static_cast<unsigned>(strbuf.size()));
     client->write(strbuf.c_str(), strbuf.size());
     client->print("\n");
     return true;
@@ -845,7 +878,8 @@ static bool response_text(draw_param_t* draw_param, connection_t* conn) {
         "HTTP/1.1 200 OK\nContent-Type: text/html; "
         "charset=UTF-8\nX-Content-Type-Options: nosniff\nConnection: "
         "keep-alive\nCache-Control: no-cache\n");
-    client->printf("Content-Length: %d\n\n", strbuf.size() - 1);
+    client->printf("Content-Length: %u\n\n",
+                   static_cast<unsigned>(strbuf.size()));
     client->write(strbuf.c_str(), strbuf.size());
 
     return true;
@@ -1066,54 +1100,6 @@ static bool response_top(draw_param_t* draw_param, connection_t* conn) {
     return false;
 }
 
-static bool response_test(draw_param_t* draw_param, connection_t* conn) {
-    static constexpr const char head[] =
-        "HTTP/1.1 200 OK\n"
-        "Content-Type: text/html\n"
-        "Content-Length: 16\n"
-        "Connection: keep-alive\n"
-        "Cache-Control: no-store\n"
-        "\n";
-    auto client = &conn->client;
-
-    client->print(head);
-    client->print("0123456789abcdef\n\n\n");
-    client->flush();
-    return true;
-
-    /*/
-    static constexpr const char html[] = "HTTP/1.1 200 OK\nContent-Type:
-    text/html\nConnection:close\n\n"
-    "<!DOCTYPE HTML><html><head><meta charset=\"utf-8\">"
-    "<meta name=\"viewport\" content=\"width=device-width,
-    initial-scale=1\"><style>" "  html { font-family: Helvetica; display:
-    inline-block; margin: 0px auto;text-align: center;} " "  h1
-    {font-size:28px;} " " .btn_on { padding:12px 30px; text-decoration:none;
-    font-size:24px; background-color: " "  #668ad8; color: #FFF; border-bottom:
-    solid 4px #627295; border-radius: 2px;} " "      .btn_on:active {
-    -webkit-transform: translateY(0px); transform: translateY(0px); " "
-    border-bottom: none;} " "      .btn_off { background-color: #555555;
-    border-bottom: solid 4px #333333;} " "      .slider { width: 200px;} " "
-    </style><script
-    src=\"https://ajax.googleapis.com/ajax/libs/jquery/3.4.1/jquery.min.js\"></script></head>"
-    " <body><h1>M5TLite</h1> ";
-                                client->print(html);
-                                client->printf("<p>Brightness (<span
-    id=\"emissivityValue\"></span>)</p>"
-                                            "<input type=\"range\" min=\"5\"
-    max=\"100\" step=\"1\" class=\"slider\" id=\"emissivityInput\"
-    onchange=\"valueFunction(this.value)\" value=\"%d\" />",
-    draw_param->perf_emissivity); client->print("<script> var obj =
-    document.getElementById(\"emissivityInput\");" "var target =
-    document.getElementById(\"emissivityValue\");" "target.innerHTML =
-    obj.value;" "obj.oninput = function() { obj.value = this.value;
-    target.innerHTML = this.value; } \n" " function valueFunction(val) {
-    $.get(\"/?value=\" + val + '&'); { Connection: close}; }"
-        "</script></body></html>");
-    return false;
-    //*/
-}
-
 struct response_table_t {
     const char* path;
     bool (*response_func)(draw_param_t*, connection_t*);
@@ -1161,7 +1147,6 @@ static constexpr const response_table_t response_table[] = {
     {"/json", response_json},   {"/text", response_text},
     {"/wifi", response_wifi},   {"/stream", response_stream},
     {"/param", response_param}, {"/api/sentry/status", response_sentry_status},
-    // { "/test"   , response_test },
 };
 
 void webserverTask(void* arg) {
@@ -1172,10 +1157,7 @@ void webserverTask(void* arg) {
     static constexpr const size_t connection_size = 8;
     connection_t connection[connection_size];
     uint8_t connection_index  = 0;
-    uint32_t conn_idx         = 0;
     bool prev_connected       = false;
-    uint8_t restart_countdown = 0;
-    uint8_t prev_active_count = 0;
     uint8_t active_count      = 0;
     uint8_t loop_counter      = 0;
 
@@ -1221,21 +1203,6 @@ void webserverTask(void* arg) {
             delay(32);
             continue;
         }
-        /*
-                if (active_count == 0) {
-                    if (prev_active_count) {
-                        restart_countdown = 255;
-                    }
-                    if (restart_countdown) {
-                        if (0 == --restart_countdown) {
-        ESP_EARLY_LOGD("DEBUG","httpServer restart");
-                                httpServer.end();
-                                httpServer.begin();
-                        }
-                    }
-                }
-        //*/
-
         uint32_t current_millis = millis();
 
         if (httpServer.hasClient()) {
@@ -1261,7 +1228,6 @@ void webserverTask(void* arg) {
             }
         }
 
-        prev_active_count = active_count;
         active_count      = 0;
 
         for (auto& conn : connection) {
@@ -1293,31 +1259,18 @@ void webserverTask(void* arg) {
                         continue;
                     }
                     if (c != '\n') {
+                        if (conn.line_buf.size() >= kMaxHttpLineLength) {
+                            conn.stop();
+                            break;
+                        }
                         conn.line_buf.append(1, c);
                     } else {
                         // ESP_EARLY_LOGD("DEBUG", "line_buf : %s",
                         // conn.line_buf.c_str());
                         if (conn.line_buf.empty()) {
                             if (conn.is_post) {
-                                char buffer[256] = {
-                                    0,
-                                };
-                                // memset(conn.post_data, 0,
-                                // sizeof(conn.post_data));
-                                int len;
-                                int retry = 256;
-                                do {
-                                    delay(1);
-                                } while (0 == (len = client->available()) &&
-                                         --retry);
-                                if (len > 255) len = 255;
-                                if (len) {
-                                    client->readBytes(buffer, len);
-                                    conn.request_post = buffer;
-                                }
-                                // conn.post_data_len = len;
-                                // ESP_EARLY_LOGD("DEBUG","POST_DATA : %s",
-                                // buffer);
+                                read_request_post_body(client,
+                                                       &conn.request_post);
                             }
                             if (conn.request_path.length()) {
                                 bool hit = false;

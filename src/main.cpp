@@ -120,8 +120,8 @@ static ui_orientation_t detect_orientation(float ax, float ay,
                             : ui_orientation_t::landscape_180;
     }
     if (abs_ay > (abs_ax + axis_hysteresis)) {
-        return (ay >= 0.0f) ? ui_orientation_t::portrait_cw
-                            : ui_orientation_t::portrait_ccw;
+        return (ay >= 0.0f) ? ui_orientation_t::portrait_ccw
+                            : ui_orientation_t::portrait_cw;
     }
     return fallback;
 }
@@ -141,16 +141,19 @@ static bool apply_orientation(draw_param_t* param, ui_orientation_t orientation)
             break;
         case ui_orientation_t::landscape_180:
             display_rotation = 3;
-            sidebar_on_right = false;
+            // Keep sidebar placement stable when flipping 0 <-> 180.
+            sidebar_on_right = true;
             break;
         case ui_orientation_t::portrait_ccw:
             portrait_text_mode  = true;
-            portrait_rotation   = -1;
+            // Portrait text direction depends on current landscape base.
+            portrait_rotation   = (display_rotation == 3) ? 1 : -1;
             sidebar_on_right    = (display_rotation == 1);
             break;
         case ui_orientation_t::portrait_cw:
             portrait_text_mode  = true;
-            portrait_rotation   = 1;
+            // Portrait text direction depends on current landscape base.
+            portrait_rotation   = (display_rotation == 3) ? -1 : 1;
             sidebar_on_right    = (display_rotation == 1);
             break;
     }
@@ -536,12 +539,9 @@ static constexpr const char KEY_SENS_MONITORAREA[] = "monitorarea";
 static constexpr const char KEY_SENS_EMISSIVITY[]  = "emissivity";
 static constexpr const char KEY_RANGE_AUTOSWITCH[] = "range_auto";
 static constexpr const char KEY_RANGE_UPPER[]      = "range_upper";
-static constexpr const char KEY_RANGE_LOWER []      = "range_lower";
+static constexpr const char KEY_RANGE_LOWER[]      = "range_lower";
 static constexpr const char KEY_NET_WIFI_MODE[]    = "net_wifi";
 static constexpr const char KEY_NET_JPGQUALITY[]   = "jpg_quality";
-static constexpr const char KEY_CLOUD_UPLOAD[]     = "upload_ena";
-static constexpr const char KEY_CLOUD_INTERVAL[]   = "upload_int";
-static constexpr const char KEY_CLOUD_TOKEN[]      = "ezdata_token";
 static constexpr const char KEY_NET_TIMEZONE[]     = "timezone";
 static constexpr const char KEY_MISC_CPUSPEED[]    = "cpuspeed";
 static constexpr const char KEY_MISC_BRIGHTNESS[]  = "brightness";
@@ -554,22 +554,11 @@ static constexpr const char KEY_MISC_SENTRY_INTERVAL[] = "sentry_interval";
 static constexpr const char KEY_MISC_SENTRY_MODE[] = "sentry_mode";
 // static constexpr const char KEY_MISC_ROTATION[]     = "msc_rotation";
 
-std::string convert(const std::string& src) {
-    std::string res;
-    int i = src.length();
-    for (auto c : src) {
-        i = (i + 1) & 15;
-        c = c ^ i;
-        res.append(1, c);
-    }
-    return res;
-}
-
 void config_param_t::saveNvs(void) {
     ESP_LOGD("DEBUG", "saveNvs in");
     /// ToDo:FlashROMのキャッシュが無効化するため排他制御が必要
     Preferences pref;
-    bool exist = pref.begin(NVS_NAMESPACE, false);
+    pref.begin(NVS_NAMESPACE, false);
     pref.putUShort(KEY_ALARM_TEMPERATURE, alarm_temperature.get());
     pref.putUChar(KEY_ALARM_REFERENCE, alarm_reference);
     pref.putUChar(KEY_ALARM_MODE, alarm_mode);
@@ -3951,6 +3940,10 @@ void loop(void) {
         }
         // Obtain temperature data structure.
         auto temp_data = command_processor::getTemperatureData();
+        if (temp_data == nullptr) {
+            delay(1);
+            return;
+        }
 
         uint32_t search_lowest  = UINT16_MAX;
         uint32_t search_highest = 0;
@@ -4091,10 +4084,14 @@ void loop(void) {
 
         frame->temp[frame->lowest]  = search_lowest;
         frame->temp[frame->highest] = search_highest;
-        frame->temp[frame->average] = search_total / search_count;
         frame->temp[frame->center] =
             frame->pixel_raw[(frame_width >> 1) +
                              (frame_width * (frame_height >> 1))];
+        if (search_count == 0) {
+            frame->temp[frame->average] = frame->temp[framedata_t::center];
+        } else {
+            frame->temp[frame->average] = search_total / search_count;
+        }
 
         uint8_t idx = draw_param.graph_data.current_idx + 1;
         for (uint_fast8_t i = 0; i < 4; ++i) {

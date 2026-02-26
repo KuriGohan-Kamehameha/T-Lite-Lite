@@ -10,6 +10,7 @@
 #include <soc/rtc.h>
 
 #include <driver/gpio.h>
+#include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_task_wdt.h>
 
@@ -68,6 +69,52 @@ static inline void gpio_lo(int_fast8_t pin) { *get_gpio_lo_reg(pin) = 1 << (pin 
 static int8_t _battery_state = 0;
 static int8_t _battery_level = 0;
 static bool _battery_request = false;
+static bool _buffer_alloc_ok = false;
+
+static void releaseSensorBuffers(void) {
+    for (size_t i = 0; i < MLX_FRAMEDATA_ARRAY_SIZE; ++i) {
+        if (_mlx_framedatas[i]) {
+            heap_caps_free(_mlx_framedatas[i]);
+            _mlx_framedatas[i] = nullptr;
+        }
+    }
+    for (size_t i = 0; i < MLX_TEMP_ARRAY_SIZE; ++i) {
+        if (_mlx_tempdatas[i]) {
+            heap_caps_free(_mlx_tempdatas[i]);
+            _mlx_tempdatas[i] = nullptr;
+        }
+    }
+}
+
+static bool allocateSensorBuffers(void) {
+    for (size_t i = 0; i < MLX_FRAMEDATA_ARRAY_SIZE; ++i) {
+        _mlx_framedatas[i] = static_cast<uint16_t*>(heap_caps_malloc(
+            m5::MLX90640_Class::FRAME_DATA_BYTES, MALLOC_CAP_DMA));
+        if (_mlx_framedatas[i] == nullptr) {
+            ESP_LOGE("command_processor",
+                     "Failed to allocate frame buffer %u",
+                     static_cast<unsigned>(i));
+            releaseSensorBuffers();
+            return false;
+        }
+        memset(_mlx_framedatas[i], 0x2C, m5::MLX90640_Class::FRAME_DATA_BYTES);
+    }
+
+    for (size_t i = 0; i < MLX_TEMP_ARRAY_SIZE; ++i) {
+        _mlx_tempdatas[i] =
+            static_cast<m5::MLX90640_Class::temp_data_t*>(heap_caps_malloc(
+                sizeof(m5::MLX90640_Class::temp_data_t), MALLOC_CAP_DMA));
+        if (_mlx_tempdatas[i] == nullptr) {
+            ESP_LOGE("command_processor",
+                     "Failed to allocate temp buffer %u",
+                     static_cast<unsigned>(i));
+            releaseSensorBuffers();
+            return false;
+        }
+        memset(_mlx_tempdatas[i], 0, sizeof(m5::MLX90640_Class::temp_data_t));
+    }
+    return true;
+}
 
 void updateBattery(void) {
     if (M5.Power.getType() == m5::Power_Class::pmic_ip5306) {
@@ -134,8 +181,6 @@ static void IRAM_ATTR mlxTask(void* main_handle) {
             }
             // initialize sensor.
             _i2c_in.init(PORT_I2C, PIN_IN_SDA, PIN_IN_SCL);
-            int retry = 16;
-
             while (!_mlx.init(&_i2c_in)) {
                 ESP_EARLY_LOGD("mlxTask", "I2C int");
                 vTaskDelay(100);
@@ -184,6 +229,10 @@ static void IRAM_ATTR mlxTask(void* main_handle) {
 }
 
 m5::MLX90640_Class::temp_data_t* getTemperatureData(void) {
+    if (!_buffer_alloc_ok || _idx_tempdata < 0 ||
+        _idx_tempdata >= static_cast<int>(MLX_TEMP_ARRAY_SIZE)) {
+        return nullptr;
+    }
     return _mlx_tempdatas[_idx_tempdata];
 }
 
@@ -198,27 +247,31 @@ void setEmissivity(uint8_t percent) {
 }
 
 void setup(void) {
-    for (int i = 0; i < MLX_FRAMEDATA_ARRAY_SIZE; ++i) {
-        _mlx_framedatas[i] = (uint16_t*)heap_caps_malloc(
-            m5::MLX90640_Class::FRAME_DATA_BYTES, MALLOC_CAP_DMA);
-        memset(_mlx_framedatas[i], 0x2C, m5::MLX90640_Class::FRAME_DATA_BYTES);
+    releaseSensorBuffers();
+    _buffer_alloc_ok = allocateSensorBuffers();
+    if (!_buffer_alloc_ok) {
+        return;
     }
 
-    xTaskCreatePinnedToCore(mlxTask, "mlxTask", 8192,
-                            xTaskGetCurrentTaskHandle(), 20, nullptr,
-                            APP_CPU_NUM);
     _refresh_rate = m5::MLX90640_Class::rate_32Hz;
     _noise_filter = 8;
     _emissivity   = 98;  // <- default : 98.0 %
-
-    for (int i = 0; i < MLX_TEMP_ARRAY_SIZE; ++i) {
-        _mlx_tempdatas[i] = (m5::MLX90640_Class::temp_data_t*)heap_caps_malloc(
-            sizeof(m5::MLX90640_Class::temp_data_t), MALLOC_CAP_DMA);
-        memset(_mlx_tempdatas[i], 0, sizeof(m5::MLX90640_Class::temp_data_t));
+    _idx_framedata = -1;
+    _idx_tempdata  = MLX_TEMP_ARRAY_SIZE - 1;
+    auto result    = xTaskCreatePinnedToCore(mlxTask, "mlxTask", 8192,
+                                             xTaskGetCurrentTaskHandle(), 20,
+                                             nullptr, APP_CPU_NUM);
+    if (result != pdPASS) {
+        ESP_LOGE("command_processor", "Failed to create mlxTask");
+        _buffer_alloc_ok = false;
+        releaseSensorBuffers();
     }
 }
 
 bool IRAM_ATTR loop(void) {
+    if (!_buffer_alloc_ok || _idx_framedata < 0) {
+        return false;
+    }
     static int prev_idx_framedata = -1;
     if (prev_idx_framedata == _idx_framedata) return false;
     // if (prev_idx_framedata != _idx_framedata)
@@ -241,6 +294,9 @@ bool IRAM_ATTR loop(void) {
         int idx =
             _idx_tempdata < MLX_TEMP_ARRAY_SIZE - 1 ? _idx_tempdata + 1 : 0;
         _temp_data = _mlx_tempdatas[idx];
+        if (_temp_data == nullptr) {
+            return false;
+        }
 
         float emissivity = ((float)_emissivity) / 100.0f;
         _mlx.calcTempData(_mlx_framedatas[prev_idx_framedata], _temp_data,
@@ -248,10 +304,21 @@ bool IRAM_ATTR loop(void) {
 
         auto prev_temp_data = _mlx_tempdatas[(idx + MLX_TEMP_ARRAY_SIZE - 2) %
                                              MLX_TEMP_ARRAY_SIZE];
+        if (prev_temp_data == nullptr) {
+            return false;
+        }
 
         static constexpr int16_t noise_filter_level[] = {181, 256,  362,  512,
                                                          724, 1024, 1448, 2048};
-        int filter_value = noise_filter_level[_mlx.getRate()];
+        int rate = _mlx.getRate();
+        if (rate < 0) {
+            rate = 0;
+        } else if (rate >= static_cast<int>(sizeof(noise_filter_level) /
+                                            sizeof(noise_filter_level[0]))) {
+            rate = (sizeof(noise_filter_level) / sizeof(noise_filter_level[0])) -
+                   1;
+        }
+        int filter_value = noise_filter_level[rate];
         int filter_level = (filter_value * (_noise_filter & 0xF)) >> 6;
 
         /// ノイズフィルタ処理
