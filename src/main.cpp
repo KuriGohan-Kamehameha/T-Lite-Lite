@@ -126,41 +126,52 @@ static ui_orientation_t detect_orientation(float ax, float ay,
     return fallback;
 }
 
+static bool compute_sidebar_on_right(const draw_param_t* param,
+                                     bool landscape_inverted) {
+    bool pref_bottom_right =
+        param->misc_sidebar_location ==
+        draw_param_t::misc_sidebar_location_t::
+            misc_sidebar_location_bottom_right;
+    return pref_bottom_right ^ landscape_inverted;
+}
+
 static bool apply_orientation(draw_param_t* param, ui_orientation_t orientation) {
     bool changed = false;
 
-    uint8_t display_rotation = param->display_rotation;
-    bool sidebar_on_right    = param->sidebar_on_right;
+    // Keep canvas orientation fixed; only rotate text/numbers as needed.
+    uint8_t display_rotation = 1;
+    bool landscape_inverted  = param->landscape_inverted;
     bool portrait_text_mode  = false;
     int8_t portrait_rotation = 0;
 
     switch (orientation) {
         case ui_orientation_t::landscape_0:
-            display_rotation = 1;
-            sidebar_on_right = true;
+            landscape_inverted = false;
             break;
         case ui_orientation_t::landscape_180:
-            display_rotation = 3;
-            // Keep sidebar placement stable when flipping 0 <-> 180.
-            sidebar_on_right = true;
+            // Do not flip the whole screen at 180; invert only numeric text.
+            landscape_inverted = true;
             break;
         case ui_orientation_t::portrait_ccw:
             portrait_text_mode  = true;
             // Portrait text direction depends on current landscape base.
-            portrait_rotation   = (display_rotation == 3) ? 1 : -1;
-            sidebar_on_right    = (display_rotation == 1);
+            portrait_rotation   = landscape_inverted ? 1 : -1;
             break;
         case ui_orientation_t::portrait_cw:
             portrait_text_mode  = true;
             // Portrait text direction depends on current landscape base.
-            portrait_rotation   = (display_rotation == 3) ? -1 : 1;
-            sidebar_on_right    = (display_rotation == 1);
+            portrait_rotation   = landscape_inverted ? -1 : 1;
             break;
     }
+    bool sidebar_on_right = compute_sidebar_on_right(param, landscape_inverted);
 
     if (param->display_rotation != display_rotation) {
         param->display_rotation = display_rotation;
         changed                 = true;
+    }
+    if (param->landscape_inverted != landscape_inverted) {
+        param->landscape_inverted = landscape_inverted;
+        changed                   = true;
     }
     if (param->sidebar_on_right != sidebar_on_right) {
         param->sidebar_on_right = sidebar_on_right;
@@ -197,7 +208,7 @@ static void update_orientation_awareness(draw_param_t* param) {
         }
         if (orientation == ui_orientation_t::portrait_ccw ||
             orientation == ui_orientation_t::portrait_cw) {
-            return (param->display_rotation == 3)
+            return (param->landscape_inverted)
                        ? ui_orientation_t::landscape_180
                        : ui_orientation_t::landscape_0;
         }
@@ -319,17 +330,21 @@ static void datum_to_topleft(int32_t x, int32_t y, int32_t text_w, int32_t text_
     *out_y = top;
 }
 
-static void draw_oriented_text(LovyanGFX* gfx, const char* text, int32_t x,
-                               int32_t y, textdatum_t datum) {
-    if (!text || !text[0]) {
-        return;
+static bool looks_numeric_text(const char* text) {
+    if (!text) {
+        return false;
     }
-    if (!draw_param.portrait_text_mode || draw_param.portrait_text_rotation == 0) {
-        gfx->setTextDatum(datum);
-        gfx->drawString(text, x, y);
-        return;
+    while (*text == ' ' || *text == '\t') {
+        ++text;
     }
+    if (*text == '+' || *text == '-') {
+        ++text;
+    }
+    return (*text >= '0' && *text <= '9');
+}
 
+static void draw_rotated_text(LovyanGFX* gfx, const char* text, int32_t x,
+                              int32_t y, textdatum_t datum, float angle_deg) {
     static constexpr const uint16_t transparent_key = 0xF81F;
     static M5Canvas text_canvas;
     static int32_t text_canvas_w = 0;
@@ -353,9 +368,8 @@ static void draw_oriented_text(LovyanGFX* gfx, const char* text, int32_t x,
         text_canvas.createSprite(text_canvas_w, text_canvas_h);
     }
 
-    auto style = gfx->getTextStyle();
+    auto style  = gfx->getTextStyle();
     style.datum = textdatum_t::top_left;
-
     text_canvas.fillScreen(transparent_key);
     text_canvas.setFont(gfx->getFont());
     text_canvas.setTextStyle(style);
@@ -367,11 +381,30 @@ static void draw_oriented_text(LovyanGFX* gfx, const char* text, int32_t x,
 
     const float dst_x = left + (text_w * 0.5f);
     const float dst_y = top + (text_h * 0.5f);
-    const float angle = draw_param.portrait_text_rotation > 0 ? 90.0f : -90.0f;
-
     text_canvas.setPivot(text_canvas_w * 0.5f, text_canvas_h * 0.5f);
-    text_canvas.pushRotateZoom(gfx, dst_x, dst_y, angle, 1.0f, 1.0f,
+    text_canvas.pushRotateZoom(gfx, dst_x, dst_y, angle_deg, 1.0f, 1.0f,
                                transparent_key);
+}
+
+static void draw_oriented_text(LovyanGFX* gfx, const char* text, int32_t x,
+                               int32_t y, textdatum_t datum) {
+    if (!text || !text[0]) {
+        return;
+    }
+    float angle_deg = 0.0f;
+    if (draw_param.portrait_text_mode && draw_param.portrait_text_rotation != 0) {
+        angle_deg = draw_param.portrait_text_rotation > 0 ? 90.0f : -90.0f;
+    } else if (!draw_param.in_config_mode && draw_param.landscape_inverted &&
+               looks_numeric_text(text)) {
+        // In 180 mode keep UI orientation stable but flip numeric readouts.
+        angle_deg = 180.0f;
+    }
+    if (angle_deg == 0.0f) {
+        gfx->setTextDatum(datum);
+        gfx->drawString(text, x, y);
+        return;
+    }
+    draw_rotated_text(gfx, text, x, y, datum, angle_deg);
 }
 
 static void draw_oriented_number(LovyanGFX* gfx, int32_t value, int32_t x,
@@ -566,6 +599,7 @@ static constexpr const char KEY_MISC_POINTER[]     = "pointer";
 static constexpr const char KEY_MISC_AUTOPOWEROFF[] = "autopoweroff";
 static constexpr const char KEY_MISC_SENTRY_INTERVAL[] = "sentry_interval";
 static constexpr const char KEY_MISC_SENTRY_MODE[] = "sentry_mode";
+static constexpr const char KEY_MISC_SIDEBAR_LOCATION[] = "sidebar_loc";
 // static constexpr const char KEY_MISC_ROTATION[]     = "msc_rotation";
 
 void config_param_t::saveNvs(void) {
@@ -595,6 +629,7 @@ void config_param_t::saveNvs(void) {
     pref.putUChar(KEY_MISC_AUTOPOWEROFF, misc_autopoweroff);
     pref.putUChar(KEY_MISC_SENTRY_INTERVAL, misc_sentry_interval);
     pref.putUChar(KEY_MISC_SENTRY_MODE, misc_sentry_mode.get());
+    pref.putUChar(KEY_MISC_SIDEBAR_LOCATION, misc_sidebar_location);
     // pref.putString(KEY_NET_SSID         , net_ssid.c_str()     );
     // pref.putString(KEY_NET_PWD          , convert(net_pwd).c_str());
     // pref.putUChar( KEY_MISC_ROTATION    , misc_rotation        );
@@ -648,6 +683,8 @@ void config_param_t::loadNvs(void) {
             KEY_MISC_SENTRY_INTERVAL, misc_sentry_interval);
         misc_sentry_mode = (config_param_t::misc_sentry_mode_t)pref.getUChar(
             KEY_MISC_SENTRY_MODE, misc_sentry_mode);
+        misc_sidebar_location = (config_param_t::misc_sidebar_location_t)pref.getUChar(
+            KEY_MISC_SIDEBAR_LOCATION, misc_sidebar_location);
         pref.end();
     }
 
@@ -679,6 +716,8 @@ void config_param_t::loadDefault(void) {
     misc_autopoweroff = misc_autopoweroff_t ::misc_autopoweroff_never;
     misc_sentry_interval = config_param_t::misc_sentry_interval_t ::misc_sentry_interval_5m;
     misc_sentry_mode = misc_sentry_mode_t ::misc_sentry_mode_off;
+    misc_sidebar_location =
+        misc_sidebar_location_t::misc_sidebar_location_bottom_right;
 }
 
 void config_param_t::setEmissivity(uint8_t emissivity) {
@@ -1929,6 +1968,8 @@ class config_ui_t : public container_ui_t {
             new value_ui_t{&draw_param.misc_sentry_interval, true});
         misc_config_ui.addItem(new value_ui_t{&draw_param.misc_pointer, true});
         misc_config_ui.addItem(new value_ui_t{&draw_param.misc_color, true});
+        misc_config_ui.addItem(
+            new value_ui_t{&draw_param.misc_sidebar_location, true});
         misc_config_ui.addItem(new value_ui_t{
             &lt_Factory_Reset, &draw_param.misc_backtofactory, true});
 
@@ -2097,6 +2138,16 @@ void config_param_t::misc_color_func(misc_color_t v) {
     draw_param.color_map = color_map_table[v];
 }
 
+void config_param_t::misc_sidebar_location_func(misc_sidebar_location_t v) {
+    bool sidebar_on_right = compute_sidebar_on_right(
+        &draw_param, draw_param.landscape_inverted);
+    if (draw_param.sidebar_on_right != sidebar_on_right) {
+        draw_param.sidebar_on_right = sidebar_on_right;
+        ++draw_param.modify_count;
+    }
+    (void)v;
+}
+
 class battery_ui_t : public ui_base_t {
     int8_t prev_battery_level = 0;
 
@@ -2112,7 +2163,7 @@ class battery_ui_t : public ui_base_t {
         int32_t y     = _client_rect.y - canvas_y;
         int32_t bat_h = (100 - prev_battery_level) * _client_rect.h / 100;
 
-        uint32_t fg = param->battery_state ? 0x00FF00u : 0x8080FFu;
+        uint32_t fg = param->battery_state ? 0x00FF00u : 0xFF8A00u;
         canvas->fillRect(x, y, _client_rect.w, bat_h, 0xFF0000u);
         canvas->fillRect(x, y + bat_h, _client_rect.w, _client_rect.h, fg);
     }
@@ -2154,9 +2205,10 @@ class header_ui_t : public ui_base_t {
         // }
 
         for (int i = 0; i < _client_rect.h; ++i) {
-            canvas->drawFastHLine(
-                _client_rect.x, i + _client_rect.y - canvas_y, _client_rect.w,
-                canvas->color565(0, 128 - (i << 7) / _client_rect.h, 0));
+                canvas->drawFastHLine(
+                    _client_rect.x, i + _client_rect.y - canvas_y, _client_rect.w,
+                    canvas->color565(120 + ((i << 6) / _client_rect.h),
+                                     48 + ((i << 5) / _client_rect.h), 0));
         }
         canvas->setTextColor(TFT_WHITE);
 
@@ -2784,13 +2836,17 @@ class hist_ui_t : public ui_base_t {
                     // int rw = drawWidth - x;
                     // int rh = 1;
                     // rotateCoordinate(param->rotation, rx, ry, rw, rh);
-                    canvas->fillRect(_client_rect.x, y, drawWidth - x, 1,
-                                     bgcolor);
+                    if ((drawWidth - x) > 0) {
+                        canvas->fillRect(_client_rect.x, y, drawWidth - x, 1,
+                                         bgcolor);
+                    }
                     // if (_prev_hist_line[i] != drawline || isInvalidated())
                     {
                         // _prev_hist_line[i] = drawline;
-                        canvas->fillRect(_client_rect.x + drawWidth - x, y,
-                                         drawWidth, 1, color);
+                        if (x > 0) {
+                            canvas->fillRect(_client_rect.x + drawWidth - x, y,
+                                             x, 1, color);
+                        }
                         // px = 0;
                     }
                 }
@@ -3089,8 +3145,10 @@ void drawTask(void*) {
     uint32_t prev_wdt  = 0;
 
     draw_param.setup(&display, framedata, 2);
-    draw_param.display_rotation      = display.getRotation();
-    draw_param.sidebar_on_right      = (draw_param.display_rotation == 1);
+    draw_param.display_rotation      = 1;
+    draw_param.landscape_inverted    = false;
+    draw_param.sidebar_on_right =
+        compute_sidebar_on_right(&draw_param, draw_param.landscape_inverted);
     draw_param.portrait_text_mode    = false;
     draw_param.portrait_text_rotation = 0;
     // draw_param.setColorTable(color_map_table[0]);

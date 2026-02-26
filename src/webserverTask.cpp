@@ -186,18 +186,18 @@ static bool response_main(draw_param_t* draw_param, connection_t* conn) {
 
     strbuf = R"TLITE(<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>
 <meta name='viewport' content='width=device-width,initial-scale=1'>
-<meta name='theme-color' content='#113548'>
+<meta name='theme-color' content='#5f2b0d'>
 <title>Thermal Device Control</title>
 <style>
 :root{
-  --bg:#eff6f9;
-  --card:#ffffff;
-  --ink:#11252f;
-  --muted:#5b7683;
-  --line:#bfd4de;
-  --accent:#0f7ca4;
+  --bg:#fff3e8;
+  --card:#fffaf5;
+  --ink:#3a230f;
+  --muted:#8a5a35;
+  --line:#efc7a2;
+  --accent:#d75a18;
   --ok:#2c9a3a;
-  --warn:#cb5f2c;
+  --warn:#c54a17;
 }
 *{box-sizing:border-box}
 body{
@@ -205,8 +205,8 @@ body{
   font-family:'Trebuchet MS','Gill Sans','Helvetica Neue',sans-serif;
   color:var(--ink);
   background:
-    radial-gradient(120% 90% at 100% -10%, #d9f2ff 0, transparent 56%),
-    radial-gradient(120% 120% at -20% 120%, #ffe4c6 0, transparent 54%),
+    radial-gradient(120% 90% at 100% -10%, #ffd8b4 0, transparent 56%),
+    radial-gradient(120% 120% at -20% 120%, #ffc392 0, transparent 54%),
     var(--bg);
 }
 .app{max-width:1120px;margin:0 auto;padding:16px 14px 24px}
@@ -214,9 +214,9 @@ body{
 h1{margin:0;font-size:clamp(22px,4.2vw,36px);letter-spacing:.08em}
 .sub{margin:6px 0 0;color:var(--muted);font-size:13px}
 .badge{
-  border:1px solid #9ec7da;
-  background:#e9f7fe;
-  color:#0a5876;
+  border:1px solid #e4b080;
+  background:#fff0de;
+  color:#8d4916;
   font-size:12px;
   font-weight:700;
   letter-spacing:.04em;
@@ -234,9 +234,9 @@ h1{margin:0;font-size:clamp(22px,4.2vw,36px);letter-spacing:.08em}
   color:#fff;
   font-weight:700;
   letter-spacing:.04em;
-  background:linear-gradient(120deg, #0f7ca4, #0f5972);
+  background:linear-gradient(120deg, #e26a1d, #b24712);
 }
-.actions a.alt{background:linear-gradient(120deg, #ca6a1d, #914113)}
+.actions a.alt{background:linear-gradient(120deg, #a83a0f, #6f2309)}
 .status{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:12px}
 .stat{
   background:var(--card);
@@ -254,17 +254,17 @@ h1{margin:0;font-size:clamp(22px,4.2vw,36px);letter-spacing:.08em}
 }
 .stat span{display:block;margin-top:6px;font-size:22px;font-weight:800}
 .sentry{
-  background:linear-gradient(120deg, #123648, #0f5a72);
+  background:linear-gradient(120deg, #7d2f0f, #b74a17);
   color:#fff;
   border-radius:14px;
   padding:14px;
-  border:1px solid #2f7794;
+  border:1px solid #da8a54;
   margin-bottom:12px;
-  box-shadow:0 8px 24px rgba(17,37,47,.15);
+  box-shadow:0 8px 24px rgba(95,43,13,.2);
 }
 .sentry-head{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
 .sentry h2{margin:0;font-size:20px;letter-spacing:.06em}
-.sentry .hint{font-size:12px;color:#d4edf7}
+.sentry .hint{font-size:12px;color:#ffe7d1}
 .sentry-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
 .card{
@@ -278,7 +278,7 @@ h1{margin:0;font-size:clamp(22px,4.2vw,36px);letter-spacing:.08em}
   margin:0;
   font-size:13px;
   letter-spacing:.12em;
-  color:#0f5a72;
+  color:#8d4916;
   text-transform:uppercase;
 }
 .group{margin-top:10px}
@@ -287,14 +287,14 @@ label{display:block;font-size:13px;color:var(--muted);margin-bottom:5px;font-wei
 .range-value{color:var(--accent);font-weight:800;font-variant-numeric:tabular-nums}
 select,input[type=range]{
   width:100%;
-  background:#f7fbfd;
+  background:#fff7f0;
   border:1px solid var(--line);
   border-radius:10px;
   padding:9px;
   color:var(--ink);
   font-size:15px;
 }
-select:focus,input[type=range]:focus{outline:2px solid #8fd3ed;outline-offset:1px}
+select:focus,input[type=range]:focus{outline:2px solid #f0a565;outline-offset:1px}
 input[type=range]{padding:0;height:32px}
 .foot{margin-top:14px;font-size:13px;color:var(--muted);text-align:center}
 .toast{
@@ -490,6 +490,15 @@ input[type=range]{padding:0;height:32px}
                                      "<option value=\"%d\"%s>%s</option>", i,
                                      i == draw_param->misc_brightness.get() ? " selected" : "",
                                      draw_param->misc_brightness.getText(i)));
+    }
+    strbuf += "</select></div>";
+    strbuf += "<div class='group'><label>Sidebar Position</label>";
+    strbuf += "<select id='misc_sidebar_location' onchange=\"s('misc_sidebar_location',this.value)\">";
+    for (int i = 0; i < draw_param->misc_sidebar_location_max; ++i) {
+        strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf),
+                                     "<option value=\"%d\"%s>%s</option>", i,
+                                     i == draw_param->misc_sidebar_location.get() ? " selected" : "",
+                                     draw_param->misc_sidebar_location.getText(i)));
     }
     strbuf += "</select></div></div>";
 
@@ -703,6 +712,12 @@ static bool response_param(draw_param_t* draw_param, connection_t* conn) {
             } else if (key == "misc_color") {
                 draw_param->misc_color.set(v);
                 web_param_touched = true;
+            } else if (key == "misc_sidebar_location") {
+                bool changed = draw_param->misc_sidebar_location.set(v);
+                web_param_touched = true;
+                if (changed) {
+                    config_save_countdown = 1;
+                }
             } else if (key == "misc_sentry_mode") {
                 draw_param->misc_sentry_mode.set(v);
                 config_save_countdown = 60;
@@ -775,6 +790,10 @@ static bool response_param(draw_param_t* draw_param, connection_t* conn) {
     strbuf.append(cbuf,
                   snprintf(cbuf, sizeof(cbuf), ",\n \"misc_color\": \"%d\"",
                            draw_param->misc_color.get()));
+    strbuf.append(cbuf,
+                  snprintf(cbuf, sizeof(cbuf),
+                           ",\n \"misc_sidebar_location\": \"%d\"",
+                           draw_param->misc_sidebar_location.get()));
     strbuf.append(cbuf,
                   snprintf(cbuf, sizeof(cbuf), ",\n \"misc_sentry_mode\": \"%d\"",
                            draw_param->misc_sentry_mode.get()));

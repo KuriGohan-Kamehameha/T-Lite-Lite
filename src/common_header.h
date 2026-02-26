@@ -990,6 +990,12 @@ struct config_param_t {
         misc_color_max,
     };
 
+    enum misc_sidebar_location_t {
+        misc_sidebar_location_bottom_right,
+        misc_sidebar_location_top_left,
+        misc_sidebar_location_max,
+    };
+
     // cloud_interval_t removed
 
     static void alarm_temperature_text_func(char* text_buf, size_t buf_len,
@@ -1034,6 +1040,7 @@ struct config_param_t {
     static void misc_brightness_func(misc_brightness_t);
     static void misc_volume_func(misc_volume_t);
     static void misc_color_func(misc_color_t v);
+    static void misc_sidebar_location_func(misc_sidebar_location_t v);
     static void misc_backtofactory_func(uint8_t);
 
     config_property_localize_enum_t<net_wifi_mode_t> net_wifi_mode = {
@@ -1240,6 +1247,17 @@ struct config_param_t {
         misc_color_t ::misc_color_max,
         misc_color_func};
 
+    config_property_localize_enum_t<misc_sidebar_location_t>
+        misc_sidebar_location = {
+            {"Sidebar Position"},
+            (const localize_text_t[]){
+                {"Bottom/Right"},
+                {"Top/Left"},
+            },
+            misc_sidebar_location_t::misc_sidebar_location_bottom_right,
+            misc_sidebar_location_t::misc_sidebar_location_max,
+            misc_sidebar_location_func};
+
     config_property_value_t<uint8_t> net_jpg_quality = {uint8_t_text_func, 60,
                                                          1, 100, 1};
     config_property_value_t<uint8_t> misc_layout     = {uint8_t_text_func, 1, 0,
@@ -1289,6 +1307,7 @@ struct draw_param_t : public config_param_t {
     bool oncloud_conf_valid = false;
     uint8_t display_rotation = 1;
     bool sidebar_on_right    = true;
+    bool landscape_inverted  = false;
     bool portrait_text_mode  = false;
     int8_t portrait_text_rotation = 0;  // -1: 90deg CCW, 0: normal, 1: 90deg CW
     uint8_t macaddr[8];
