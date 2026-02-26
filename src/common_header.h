@@ -31,9 +31,11 @@ static constexpr const char wday_tbl[7][4] = {
 // Sentry Mode Status Data
 struct SentryData {
     uint32_t last_report_time = 0;
+    uint32_t last_sample_time = 0;
     float last_avg_temp = 0.0f;
     float last_min_temp = 0.0f;
     float last_max_temp = 0.0f;
+    bool has_sample = false;
 };
 
 static constexpr const uint16_t color_map_table[][256] = {
@@ -596,6 +598,7 @@ struct graph_data_t {
 };
 
 extern uint8_t config_save_countdown;
+extern volatile uint32_t web_ui_last_activity_millis;
 
 struct itext_t {
     virtual const char* get(void) const = 0;
@@ -1284,6 +1287,10 @@ struct draw_param_t : public config_param_t {
     int8_t battery_level;
     uint8_t font_height     = 8;
     bool oncloud_conf_valid = false;
+    uint8_t display_rotation = 1;
+    bool sidebar_on_right    = true;
+    bool portrait_text_mode  = false;
+    int8_t portrait_text_rotation = 0;  // -1: 90deg CCW, 0: normal, 1: 90deg CW
     uint8_t macaddr[8];
 
     // cloud_status removed

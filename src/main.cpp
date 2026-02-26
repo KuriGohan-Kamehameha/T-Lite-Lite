@@ -7,6 +7,7 @@
 #include <esp_system.h>
 #include <driver/gpio.h>
 
+#include <cmath>
 #include <vector>
 
 #include <Preferences.h>
@@ -95,6 +96,225 @@ static int smooth_move(int dst, int src) {
     return (dst == src) ? dst : ((dst + src + (src < dst ? 1 : 0)) >> 1);
 }
 
+enum class ui_orientation_t : uint8_t {
+    landscape_0,
+    landscape_180,
+    portrait_ccw,
+    portrait_cw,
+};
+
+static ui_orientation_t detect_orientation(float ax, float ay,
+                                           ui_orientation_t fallback) {
+    const float abs_ax = fabsf(ax);
+    const float abs_ay = fabsf(ay);
+    static constexpr float axis_hysteresis = 0.10f;
+
+    if (abs_ax > (abs_ay + axis_hysteresis)) {
+        return (ax >= 0.0f) ? ui_orientation_t::landscape_0
+                            : ui_orientation_t::landscape_180;
+    }
+    if (abs_ay > (abs_ax + axis_hysteresis)) {
+        return (ay >= 0.0f) ? ui_orientation_t::portrait_cw
+                            : ui_orientation_t::portrait_ccw;
+    }
+    return fallback;
+}
+
+static bool apply_orientation(draw_param_t* param, ui_orientation_t orientation) {
+    bool changed = false;
+
+    uint8_t display_rotation = param->display_rotation;
+    bool sidebar_on_right    = param->sidebar_on_right;
+    bool portrait_text_mode  = false;
+    int8_t portrait_rotation = 0;
+
+    switch (orientation) {
+        case ui_orientation_t::landscape_0:
+            display_rotation = 1;
+            sidebar_on_right = true;
+            break;
+        case ui_orientation_t::landscape_180:
+            display_rotation = 3;
+            sidebar_on_right = false;
+            break;
+        case ui_orientation_t::portrait_ccw:
+            portrait_text_mode  = true;
+            portrait_rotation   = -1;
+            sidebar_on_right    = (display_rotation == 1);
+            break;
+        case ui_orientation_t::portrait_cw:
+            portrait_text_mode  = true;
+            portrait_rotation   = 1;
+            sidebar_on_right    = (display_rotation == 1);
+            break;
+    }
+
+    if (param->display_rotation != display_rotation) {
+        param->display_rotation = display_rotation;
+        changed                 = true;
+    }
+    if (param->sidebar_on_right != sidebar_on_right) {
+        param->sidebar_on_right = sidebar_on_right;
+        changed                 = true;
+    }
+    if (param->portrait_text_mode != portrait_text_mode) {
+        param->portrait_text_mode = portrait_text_mode;
+        changed                   = true;
+    }
+    if (param->portrait_text_rotation != portrait_rotation) {
+        param->portrait_text_rotation = portrait_rotation;
+        changed                       = true;
+    }
+    if (changed) {
+        ++param->modify_count;
+    }
+    return changed;
+}
+
+static void update_orientation_awareness(draw_param_t* param) {
+    static bool initialized                  = false;
+    static ui_orientation_t stable           = ui_orientation_t::landscape_0;
+    static ui_orientation_t candidate        = ui_orientation_t::landscape_0;
+    static uint8_t candidate_stable_count    = 0;
+    static uint32_t next_orientation_read_ms = 0;
+
+    const uint32_t now = millis();
+    if (now < next_orientation_read_ms) {
+        return;
+    }
+    next_orientation_read_ms = now + 80;
+
+    float ax;
+    float ay;
+    float az;
+    if (!M5.Imu.getAccel(&ax, &ay, &az)) {
+        return;
+    }
+
+    if (!initialized) {
+        initialized = true;
+        stable = candidate = detect_orientation(ax, ay, ui_orientation_t::landscape_0);
+        apply_orientation(param, stable);
+        return;
+    }
+
+    auto detected = detect_orientation(ax, ay, stable);
+    if (detected != candidate) {
+        candidate             = detected;
+        candidate_stable_count = 0;
+        return;
+    }
+    if (candidate_stable_count < 3) {
+        ++candidate_stable_count;
+        return;
+    }
+    if (stable != detected) {
+        stable = detected;
+        apply_orientation(param, stable);
+    }
+}
+
+static void datum_to_topleft(int32_t x, int32_t y, int32_t text_w, int32_t text_h,
+                             textdatum_t datum, int32_t* out_x, int32_t* out_y) {
+    int32_t left = x;
+    int32_t top  = y;
+
+    switch (datum) {
+        case textdatum_t::top_center:
+        case textdatum_t::middle_center:
+        case textdatum_t::bottom_center:
+            left = x - (text_w >> 1);
+            break;
+        case textdatum_t::top_right:
+        case textdatum_t::middle_right:
+        case textdatum_t::bottom_right:
+            left = x - text_w;
+            break;
+        default:
+            break;
+    }
+
+    switch (datum) {
+        case textdatum_t::middle_left:
+        case textdatum_t::middle_center:
+        case textdatum_t::middle_right:
+            top = y - (text_h >> 1);
+            break;
+        case textdatum_t::bottom_left:
+        case textdatum_t::bottom_center:
+        case textdatum_t::bottom_right:
+            top = y - text_h;
+            break;
+        default:
+            break;
+    }
+
+    *out_x = left;
+    *out_y = top;
+}
+
+static void draw_oriented_text(LovyanGFX* gfx, const char* text, int32_t x,
+                               int32_t y, textdatum_t datum) {
+    if (!text || !text[0]) {
+        return;
+    }
+    if (!draw_param.portrait_text_mode || draw_param.portrait_text_rotation == 0) {
+        gfx->setTextDatum(datum);
+        gfx->drawString(text, x, y);
+        return;
+    }
+
+    static constexpr const uint16_t transparent_key = 0xF81F;
+    static M5Canvas text_canvas;
+    static int32_t text_canvas_w = 0;
+    static int32_t text_canvas_h = 0;
+
+    const int32_t text_w = gfx->textWidth(text);
+    const int32_t text_h = gfx->fontHeight();
+    if (text_w <= 0 || text_h <= 0) {
+        return;
+    }
+
+    const int32_t sprite_w = text_w + 4;
+    const int32_t sprite_h = text_h + 4;
+    if (text_canvas.getBuffer() == nullptr || text_canvas_w < sprite_w ||
+        text_canvas_h < sprite_h || text_canvas.getColorDepth() != gfx->getColorDepth()) {
+        text_canvas_w = sprite_w;
+        text_canvas_h = sprite_h;
+        text_canvas.deleteSprite();
+        text_canvas.setPsram(false);
+        text_canvas.setColorDepth(gfx->getColorDepth());
+        text_canvas.createSprite(text_canvas_w, text_canvas_h);
+    }
+
+    auto style = gfx->getTextStyle();
+    style.datum = textdatum_t::top_left;
+
+    text_canvas.fillScreen(transparent_key);
+    text_canvas.setFont(gfx->getFont());
+    text_canvas.setTextStyle(style);
+    text_canvas.drawString(text, 2, 2);
+
+    int32_t left;
+    int32_t top;
+    datum_to_topleft(x, y, text_w, text_h, datum, &left, &top);
+
+    const float dst_x = left + (text_w * 0.5f);
+    const float dst_y = top + (text_h * 0.5f);
+    const float angle = draw_param.portrait_text_rotation > 0 ? 90.0f : -90.0f;
+
+    text_canvas.setPivot(text_canvas_w * 0.5f, text_canvas_h * 0.5f);
+    text_canvas.pushRotateZoom(gfx, dst_x, dst_y, angle, 1.0f, 1.0f,
+                               transparent_key);
+}
+
+static void draw_oriented_number(LovyanGFX* gfx, int32_t value, int32_t x,
+                                 int32_t y, textdatum_t datum) {
+    char number[16];
+    snprintf(number, sizeof(number), "%d", value);
+    draw_oriented_text(gfx, number, x, y, datum);
+}
+
 static void soundStartUp(void) {
     if (draw_param.misc_volume != draw_param.misc_volume_t::misc_volume_mute) {
         M5.Speaker.playRaw(wav_enter, sizeof(wav_enter), 48000);
@@ -158,26 +378,55 @@ static void soundWiFiDisconnected(void) {
 // Sentry Mode task for periodic temperature reporting
 SentryData sentry_data;
 
+static bool sentry_capture_snapshot(uint32_t now_sec) {
+    int frame_index = idx_recv;
+    if (frame_index < 0 || frame_index >= static_cast<int>(framedata_len)) {
+        return false;
+    }
+
+    auto frame = &framedata[frame_index];
+    sentry_data.last_min_temp =
+        convertRawToCelsius(frame->temp[framedata_t::lowest]);
+    sentry_data.last_max_temp =
+        convertRawToCelsius(frame->temp[framedata_t::highest]);
+    sentry_data.last_avg_temp =
+        convertRawToCelsius(frame->temp[framedata_t::average]);
+    sentry_data.last_sample_time = now_sec;
+    sentry_data.has_sample       = true;
+    return true;
+}
+
 void sentrymodeTask(void*) {
     while (1) {
-        if (draw_param.misc_sentry_mode.get() !=
-            draw_param_t::misc_sentry_mode_t::misc_sentry_mode_off) {
-            uint32_t report_interval =
-                config_param_t::misc_sentry_interval_value[
-                    draw_param.misc_sentry_interval.get()];
-            uint32_t now = millis() / 1000;
-            
-            if ((now - sentry_data.last_report_time) >= report_interval) {
-                if (idx_recv >= 0) {
-                    auto frame = &framedata[idx_recv];
-                    sentry_data.last_min_temp = convertRawToCelsius(frame->temp[frame->lowest]);
-                    sentry_data.last_max_temp = convertRawToCelsius(frame->temp[frame->highest]);
-                    sentry_data.last_avg_temp = convertRawToCelsius(frame->temp[frame->average]);
-                }
-                sentry_data.last_report_time = now;
-            }
+        bool active = draw_param.misc_sentry_mode.get() !=
+                      draw_param_t::misc_sentry_mode_t::misc_sentry_mode_off;
+        if (!active) {
+            sentry_data.has_sample       = false;
+            sentry_data.last_sample_time = 0;
+            vTaskDelay(pdMS_TO_TICKS(250));
+            continue;
         }
-        vTaskDelay(10000 / portTICK_PERIOD_MS);
+
+        int interval_idx = draw_param.misc_sentry_interval.get();
+        if (interval_idx < 0 ||
+            interval_idx >=
+                static_cast<int>(SIZEOF_ARRAY(config_param_t::misc_sentry_interval_value))) {
+            interval_idx = config_param_t::misc_sentry_interval_t::
+                misc_sentry_interval_5m;
+        }
+
+        uint32_t report_interval =
+            config_param_t::misc_sentry_interval_value[interval_idx];
+        uint32_t now_sec = millis() / 1000;
+
+        bool captured = sentry_capture_snapshot(now_sec);
+        if (captured &&
+            (sentry_data.last_report_time == 0 ||
+             (now_sec - sentry_data.last_report_time) >= report_interval)) {
+            sentry_data.last_report_time = now_sec;
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
 
@@ -290,6 +539,7 @@ void config_param_t::saveNvs(void) {
     pref.putInt(KEY_NET_TIMEZONE, oncloud_timezone_sec);
 #endif
     pref.putUChar(KEY_MISC_BRIGHTNESS, misc_brightness);
+    pref.putUChar(KEY_MISC_VOLUME, misc_volume);
     pref.putUChar(KEY_MISC_AUTOPOWEROFF, misc_autopoweroff);
     pref.putUChar(KEY_MISC_SENTRY_INTERVAL, misc_sentry_interval);
     pref.putUChar(KEY_MISC_SENTRY_MODE, misc_sentry_mode.get());
@@ -961,7 +1211,6 @@ class overlay_ui_t : public ui_base_t {
 
         canvas->setTextSize(1);
         canvas->setTextColor(TFT_WHITE);
-        canvas->setTextDatum(textdatum_t::top_left);
         auto fh = param->font_height;
         int32_t y =
             _client_rect.y - canvas_y + ((_client_rect.h - fh * _lines) >> 1);
@@ -972,9 +1221,10 @@ class overlay_ui_t : public ui_base_t {
             if (0 == _textwidth[j]) {
                 continue;
             }
-            canvas->drawString(
-                _text[j].c_str(),
-                _client_rect.x + ((_client_rect.w - _textwidth[j]) >> 1), y);
+            draw_oriented_text(
+                canvas, _text[j].c_str(),
+                _client_rect.x + ((_client_rect.w - _textwidth[j]) >> 1), y,
+                textdatum_t::top_left);
         }
     }
 };
@@ -1093,7 +1343,8 @@ class text_control_ui_t : public control_ui_t {
             }
             xpos -= scr;
         }
-        gfx->drawString(text, xpos + offset_x, ypos);
+        draw_oriented_text(gfx, text, xpos + offset_x, ypos,
+                           textdatum_t::top_left);
     }
 };
 
@@ -1867,7 +2118,6 @@ class header_ui_t : public ui_base_t {
                 canvas->setClipRect(x, y, w, h);
             }
 
-            canvas->setTextDatum(middle_left);
             int x = _text_pos + _client_rect.x;
             int y = _client_rect.y + (_client_rect.h >> 1) - 1 - canvas_y;
 
@@ -1879,10 +2129,12 @@ class header_ui_t : public ui_base_t {
                 }
                 x += _client_rect.x;
             }
-            canvas->drawString(_text.c_str(), x, y);
+            draw_oriented_text(canvas, _text.c_str(), x, y,
+                               textdatum_t::middle_left);
             if (scroll) {
                 x += _text_width;
-                canvas->drawString(_text.c_str(), x, y);
+                draw_oriented_text(canvas, _text.c_str(), x, y,
+                                   textdatum_t::middle_left);
             }
         }
     }
@@ -2140,9 +2392,19 @@ class image_ui_t : public ui_base_t {
             int32_t y        = _client_rect.y + _marker.text_y - canvas_y;
             if (((y - marker_h) << 1) < canvas->height()) {
                 int32_t x = _client_rect.x + _marker.text_x;
-                _marker.txtimg.pushSprite(canvas,
-                                          x - (_marker.txtimg.width() >> 1),
-                                          y - (marker_h >> 1), 0);
+                if (draw_param.portrait_text_mode &&
+                    draw_param.portrait_text_rotation) {
+                    float angle =
+                        draw_param.portrait_text_rotation > 0 ? 90.0f : -90.0f;
+                    _marker.txtimg.setPivot(_marker.txtimg.width() / 2.0f,
+                                            marker_h / 2.0f);
+                    _marker.txtimg.pushRotateZoom(canvas, x, y, angle, 1.0f,
+                                                  1.0f, 0);
+                } else {
+                    _marker.txtimg.pushSprite(canvas,
+                                              x - (_marker.txtimg.width() >> 1),
+                                              y - (marker_h >> 1), 0);
+                }
             }
         }
     }
@@ -2210,7 +2472,6 @@ class graph_ui_t : public ui_base_t {
             int ystart = canvas_y - _client_rect.y;
             int yend   = ystart + h;
 
-            canvas->setTextDatum(textdatum_t::bottom_left);
             canvas->setTextSize(1);
             int fontHeight = draw_param.font_height;
 
@@ -2242,7 +2503,8 @@ class graph_ui_t : public ui_base_t {
                     int gauge_value = convertRawToCelsius(prev_raw * _step_raw +
                                                           raw_step_offset);
                     canvas->setTextColor(((color >> 1) & 0x7BEF) + 0x630C);
-                    canvas->drawNumber(gauge_value, _client_rect.x + 1, draw_y);
+                    draw_oriented_number(canvas, gauge_value, _client_rect.x + 1,
+                                         draw_y, textdatum_t::bottom_left);
                     if (draw_y >= h) {
                         break;
                     }
@@ -2337,22 +2599,21 @@ class infotext_ui_t : public ui_base_t {
             canvas->setTextColor(graph_color_table[i]);
             if (_draw_title) {
                 canvas->setTextSize(1, _textsize_y);
-                canvas->setTextDatum(textdatum_t::top_left);
-                canvas->drawString(graph_text_table[i], _client_rect.x,
-                                   _client_rect.y +
-                                       (_client_rect.h * i / _text_count) -
-                                       canvas_y);
+                draw_oriented_text(
+                    canvas, graph_text_table[i], _client_rect.x,
+                    _client_rect.y + (_client_rect.h * i / _text_count) - canvas_y,
+                    textdatum_t::top_left);
             }
 
             canvas->setTextSize(_textsize_x, _textsize_y);
-            canvas->setTextDatum(textdatum_t::top_right);
             int32_t y0 = _client_rect.h * (i) / _text_count;
             if (_two_line) {
                 int32_t y1 = _client_rect.h * (i + 1) / _text_count;
                 y0         = (y1 + y0) / 2;
             }
-            canvas->drawString(_value_text[i], _client_rect.right(),
-                               _client_rect.y + y0 - canvas_y);
+            draw_oriented_text(canvas, _value_text[i], _client_rect.right(),
+                               _client_rect.y + y0 - canvas_y,
+                               textdatum_t::top_right);
         }
     }
 };
@@ -2422,8 +2683,6 @@ class hist_ui_t : public ui_base_t {
         // drawHeight);
         // param->gfx->setClipRect(drawX, drawY, drawWidth, drawHeight);
         // param->gfx->clearClipRect();
-        canvas->setTextDatum(textdatum_t::bottom_left);
-
         int32_t x_offset = 0;
 
         int32_t y_value = canvas_y - _client_rect.y;
@@ -2451,7 +2710,8 @@ class hist_ui_t : public ui_base_t {
                 // img->setTextColor(((color >> 1) & 0x7BEF) + 0x630C);
                 // img->drawNumber(gauge_value, 1, y);
                 canvas->setTextColor(((color >> 1) & 0x7BEF) + 0x630C);
-                canvas->drawNumber(gauge_value, _client_rect.x, y);
+                draw_oriented_number(canvas, gauge_value, _client_rect.x, y,
+                                     textdatum_t::bottom_left);
             }
 
             if (i >= 0) {
@@ -2512,12 +2772,12 @@ uint8_t changeLayout(uint8_t layout_idx) {
     int disp_w = display.width();
     int disp_h = display.height();
 
-    battery_ui.setTargetRect(
-        {disp_w - battery_ui_width, 0, battery_ui_width, disp_h});
+    int battery_x = draw_param.sidebar_on_right ? (disp_w - battery_ui_width) : 0;
+    battery_ui.setTargetRect({battery_x, 0, battery_ui_width, disp_h});
     // battery_ui.setTargetRect({disp_w + 2, 0, battery_line_width, disp_h});
-    const int32_t ox = 1;
+    const int32_t ox = draw_param.sidebar_on_right ? 1 : (battery_ui_width + 1);
     const int32_t oy = 1;
-    disp_w -= (ox * 2) + battery_ui_width;
+    disp_w -= battery_ui_width + 2;
     disp_h -= (oy * 2);
 
     // in_config_mode = layout_idx & 0x80;
@@ -2750,19 +3010,24 @@ void drawTask(void*) {
     int32_t disp_width  = display.width();
     int32_t disp_height = display.height();
     auto depth          = display.getColorDepth();
-    for (int i = 0; i < disp_buf_count; ++i) {
-        disp_buf[i].deleteSprite();
-        disp_buf[i].setPsram(false);
-        disp_buf[i].setColorDepth(depth);
-        disp_buf[i].createSprite(disp_width, disp_buf_height);
-        disp_buf[i].startWrite();
-    }
-    {
+    auto rebuild_draw_buffers = [&]() {
+        disp_width  = display.width();
+        disp_height = display.height();
+        depth       = display.getColorDepth();
+        for (int i = 0; i < disp_buf_count; ++i) {
+            disp_buf[i].deleteSprite();
+            disp_buf[i].setPsram(false);
+            disp_buf[i].setColorDepth(depth);
+            disp_buf[i].createSprite(disp_width, disp_buf_height);
+            disp_buf[i].startWrite();
+        }
         rect_t rect = {disp_width >> 1, disp_height >> 1, 0, 0};
         for (auto ui : ui_list) {
             ui->setClientRect(rect);
         }
-    }
+    };
+    rebuild_draw_buffers();
+
     do {
         delay(1);
     } while (idx_recv < 2);
@@ -2772,10 +3037,14 @@ void drawTask(void*) {
     uint32_t prev_wdt  = 0;
 
     draw_param.setup(&display, framedata, 2);
+    draw_param.display_rotation      = display.getRotation();
+    draw_param.sidebar_on_right      = (draw_param.display_rotation == 1);
+    draw_param.portrait_text_mode    = false;
+    draw_param.portrait_text_rotation = 0;
     // draw_param.setColorTable(color_map_table[0]);
     graph_ui.setup(&draw_param);
 
-    uint8_t prev_layout = 255;
+    uint32_t prev_layout = UINT32_MAX;
 
     display.startWrite();
     for (;;) {
@@ -2787,11 +3056,23 @@ void drawTask(void*) {
             }
         }
 
-        if (prev_layout !=
-            (draw_param.misc_layout | draw_param.in_config_mode << 7)) {
+        update_orientation_awareness(&draw_param);
+
+        if (display.getRotation() != draw_param.display_rotation) {
+            display.setRotation(draw_param.display_rotation);
+            rebuild_draw_buffers();
+            prev_layout = UINT32_MAX;
+        }
+
+        uint32_t layout_signature = draw_param.misc_layout.get();
+        layout_signature |= ((uint32_t)draw_param.in_config_mode << 8);
+        layout_signature |= ((uint32_t)draw_param.sidebar_on_right << 9);
+        if (prev_layout != layout_signature) {
             draw_param.misc_layout = changeLayout(draw_param.misc_layout);
-            prev_layout = draw_param.misc_layout | draw_param.in_config_mode
-                                                       << 7;
+            layout_signature = draw_param.misc_layout.get();
+            layout_signature |= ((uint32_t)draw_param.in_config_mode << 8);
+            layout_signature |= ((uint32_t)draw_param.sidebar_on_right << 9);
+            prev_layout = layout_signature;
         }
 
         uint32_t msec = millis();
@@ -3073,7 +3354,8 @@ void setup(void) {
     draw_param.setFont(&fonts::Font2);
     
     // Start Sentry Mode task on PRO_CPU
-    xTaskCreatePinnedToCore(sentrymodeTask, "sentryTask", 2048, nullptr, 1, nullptr, PRO_CPU_NUM);
+    xTaskCreatePinnedToCore(sentrymodeTask, "sentryTask", 3072, nullptr, 1,
+                            nullptr, PRO_CPU_NUM);
     
     for (int i = 0; i < 4; ++i) {
         draw_param.graph_data.temp_arrays[i] = (uint16_t*)malloc(
@@ -3182,8 +3464,19 @@ void setup(void) {
 }
 
 void loop(void) {
+    static uint32_t last_activity_time       = millis();
+    static uint32_t last_web_activity_time   = 0;
+    static bool low_power_mode_active        = false;
+    static bool shutdown_warning_active      = false;
+    static uint8_t shutdown_warning_remaining = 0;
+    static uint32_t shutdown_warning_next_ms = 0;
+    static bool prev_sentry_active           = false;
+
     if (config_save_countdown) {
-        auto br = draw_param.misc_brightness_value[draw_param.misc_brightness];
+        auto br = low_power_mode_active
+                      ? draw_param.misc_brightness_value[
+                            draw_param.misc_brightness_t::misc_brightness_low]
+                      : draw_param.misc_brightness_value[draw_param.misc_brightness];
         if (display.getBrightness() != br) {
             display.setBrightness(br);
         }
@@ -3234,7 +3527,7 @@ void loop(void) {
     static uint32_t _alarm_last_time = 0;
     static uint32_t _alarm_interval  = 500;
     // 温度アラーム判定
-    if (((msec - _alarm_last_time) > _alarm_interval)) {
+    if ((idx_recv >= 0) && ((msec - _alarm_last_time) > _alarm_interval)) {
         auto frame   = &framedata[idx_recv];
         int temp_idx = 0;
         switch (draw_param.alarm_reference) {
@@ -3352,24 +3645,44 @@ void loop(void) {
     //*/
 
     M5.update();
+
+    uint32_t web_activity = web_ui_last_activity_millis;
+    if (web_activity && web_activity != last_web_activity_time) {
+        last_web_activity_time   = web_activity;
+        last_activity_time       = web_activity;
+        shutdown_warning_active  = false;
+        shutdown_warning_remaining = 0;
+        shutdown_warning_next_ms = 0;
+    }
     
     // **SENTRY MODE HANDLING**
     bool sentry_active =
         draw_param.misc_sentry_mode.get() !=
         draw_param_t::misc_sentry_mode_t::misc_sentry_mode_off;
 
-    // Ensure WiFi is enabled for Sentry Mode
-    if (sentry_active && WiFi.getMode() == WIFI_OFF) {
-        draw_param.net_wifi_mode = config_param_t::net_wifi_mode_connect_saved;
-        WiFi.begin(); // Triggers the connection logic in main loop
+    if (sentry_active && !prev_sentry_active) {
+#if !defined(WIFI_DISABLED)
+        if (draw_param.net_wifi_mode ==
+            draw_param.net_wifi_mode_t::net_wifi_mode_off) {
+            draw_param.net_wifi_mode =
+                config_param_t::net_wifi_mode_connect_saved;
+        }
+        need_wifi_reconnect = true;
+#endif
+        sentry_data.last_report_time = 0;
+        web_ui_last_activity_millis  = millis();
     }
+    prev_sentry_active = sentry_active;
 
     if (sentry_active) {
+        // Keep auto-poweroff timer fresh while Sentry mode is active.
+        last_activity_time = millis();
+
         // Center button single press: show SENTRY MODE for a few seconds
         if (M5.BtnC.wasClicked()) {
             const char* temp_line = nullptr;
             char temp_str[32];
-            if (sentry_data.last_avg_temp > -100) {
+            if (sentry_data.has_sample) {
                 snprintf(temp_str, sizeof(temp_str), "%.1fC", sentry_data.last_avg_temp);
                 temp_line = temp_str;
             }
@@ -3377,6 +3690,7 @@ void loop(void) {
             if (draw_param.misc_volume != draw_param.misc_volume_t::misc_volume_mute) {
                 M5.Speaker.tone(1000, 100);
             }
+            web_ui_last_activity_millis = millis();
         }
 
         // Center button hold: exit sentry mode
@@ -3385,30 +3699,26 @@ void loop(void) {
             ::config_save_countdown = 60;
             overlay_ui.show(64, "Exiting Sentry");
             if (draw_param.misc_volume != draw_param.misc_volume_t::misc_volume_mute) {
-                M5.Speaker.tone(600, 200);
-                delay(100);
-                M5.Speaker.tone(400, 200);
+                M5.Speaker.tone(600, 120, 0, false);
+                M5.Speaker.tone(400, 160, 0, false);
             }
-            delay(1000);
+            last_activity_time = millis();
+            web_ui_last_activity_millis = last_activity_time;
         }
     }
     
     // **NORMAL MODE BUTTON HANDLING**
     if (!sentry_active) {
-    // Track last activity time for auto-poweroff
-    static uint32_t last_activity_time = millis();
-    static bool low_power_mode_active = false;
-    static bool shutdown_warning_given = false;
-    
     // Check for any button activity to reset timer
-    if (M5.BtnA.wasPressed() || M5.BtnB.wasPressed() || 
+    if (M5.BtnA.wasPressed() || M5.BtnB.wasPressed() ||
         M5.BtnC.wasPressed() || M5.BtnPWR.wasPressed()) {
         last_activity_time = millis();
-        shutdown_warning_given = false;
+        shutdown_warning_active = false;
+        shutdown_warning_remaining = 0;
     }
     
     // Low power mode - activate when battery < 20% and not charging
-    if (!low_power_mode_active && draw_param.battery_level < 20 &&
+        if (!low_power_mode_active && draw_param.battery_level < 20 &&
         !draw_param.battery_state) {
         low_power_mode_active = true;
         // Kill WiFi
@@ -3419,8 +3729,9 @@ void loop(void) {
             need_wifi_reconnect = false;
         }
         // Drop brightness to low
-        draw_param.misc_brightness = draw_param.misc_brightness_t::misc_brightness_low;
-        display.setBrightness(draw_param.misc_brightness_value[draw_param.misc_brightness]);
+        display.setBrightness(
+            draw_param.misc_brightness_value[
+                draw_param.misc_brightness_t::misc_brightness_low]);
         // Show warning
         overlay_ui.show(64, "Low Battery", "Power Save Mode");
         if (draw_param.misc_volume != draw_param.misc_volume_t::misc_volume_mute) {
@@ -3433,18 +3744,26 @@ void loop(void) {
     // Auto-poweroff logic
     if (draw_param.misc_autopoweroff != draw_param.misc_autopoweroff_t::misc_autopoweroff_never) {
         uint32_t timeout_ms = draw_param.misc_autopoweroff_value[draw_param.misc_autopoweroff] * 1000;
-        uint32_t elapsed = millis() - last_activity_time;
-        
-        // 5 seconds before shutdown, give warning beeps
-        if (!shutdown_warning_given && elapsed >= (timeout_ms - 5000) && elapsed < timeout_ms) {
-            shutdown_warning_given = true;
-            // 5 beeps at 1 second intervals
-            for (int i = 0; i < 5; i++) {
-                if (draw_param.misc_volume != draw_param.misc_volume_t::misc_volume_mute) {
-                    M5.Speaker.tone(1000, 200);
-                }
-                delay(1000);
+        uint32_t now_ms = millis();
+        uint32_t elapsed = now_ms - last_activity_time;
+        uint32_t warning_start_ms = timeout_ms > 5000 ? (timeout_ms - 5000) : 0;
+
+        // Final 5-second warning without blocking the main loop/UI.
+        if (!shutdown_warning_active && elapsed >= warning_start_ms &&
+            elapsed < timeout_ms) {
+            shutdown_warning_active = true;
+            shutdown_warning_remaining = 5;
+            shutdown_warning_next_ms = now_ms;
+        }
+
+        if (shutdown_warning_active && shutdown_warning_remaining &&
+            elapsed < timeout_ms && now_ms >= shutdown_warning_next_ms) {
+            if (draw_param.misc_volume !=
+                draw_param.misc_volume_t::misc_volume_mute) {
+                M5.Speaker.tone(1000, 200);
             }
+            --shutdown_warning_remaining;
+            shutdown_warning_next_ms += 1000;
         }
         
         // Time to power off
@@ -3454,6 +3773,9 @@ void loop(void) {
             }
             M5.Power.powerOff();
         }
+    } else {
+        shutdown_warning_active = false;
+        shutdown_warning_remaining = 0;
     }
     
     /*
@@ -3549,8 +3871,12 @@ void loop(void) {
     } else if (!draw_param.in_pause_state) {
         int idx_recv_next = (idx_recv + 1) % framedata_len;
         auto frame        = &framedata[idx_recv_next];
-        auto prev_frame   = &framedata[idx_recv % framedata_len];
-        memcpy(frame, prev_frame, sizeof(framedata_t));
+        if (idx_recv >= 0) {
+            auto prev_frame = &framedata[idx_recv % framedata_len];
+            memcpy(frame, prev_frame, sizeof(framedata_t));
+        } else {
+            memset(frame, 0, sizeof(framedata_t));
+        }
         // Obtain temperature data structure.
         auto temp_data = command_processor::getTemperatureData();
 

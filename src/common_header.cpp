@@ -5,6 +5,7 @@
 #include "common_header.h"
 
 uint8_t config_save_countdown           = 0;
+volatile uint32_t web_ui_last_activity_millis = 0;
 
 constexpr const char* config_param_t::common_off_on_text[];
 

@@ -77,7 +77,7 @@ struct connection_t {
     bool keep_connection = false;
     bool connected       = false;
     bool is_post         = false;
-    char boundary[8]     = {0};
+    char boundary[8]     = "tlite";
 
     void clear_request(void) {
         is_post = false;
@@ -94,8 +94,14 @@ struct connection_t {
     }
 };
 
+static inline int8_t from_hex(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    return -1;
+}
+
 static size_t decode_uri(char* dest, const char* src, size_t bufsiz) {
-    int status     = 0;
     size_t current = 0;
     const char* p  = src;
     if (bufsiz == 0) return 0;
@@ -103,8 +109,14 @@ static size_t decode_uri(char* dest, const char* src, size_t bufsiz) {
 
     while (*p != 0 && current < bufsiz) {
         if (p[0] == '%' && p[1] != 0 && p[2] != 0) {
-            sscanf(&p[1], "%2X", &dest[current]);
-            p += 3;
+            int8_t hi = from_hex(p[1]);
+            int8_t lo = from_hex(p[2]);
+            if (hi >= 0 && lo >= 0) {
+                dest[current] = static_cast<char>((hi << 4) | lo);
+                p += 3;
+            } else {
+                dest[current] = *p++;
+            }
         } else if (p[0] == '+') {
             dest[current] = ' ';
             p += 1;
@@ -140,50 +152,197 @@ static bool response_404(draw_param_t* draw_param, connection_t* conn) {
 static bool response_main(draw_param_t* draw_param, connection_t* conn) {
     auto client = &conn->client;
     std::string strbuf;
-    char cbuf[64];
+    char cbuf[128];
 
-    strbuf = "<html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
-        "<title>Device Control</title><style>"
-        "body{font-family:sans-serif;margin:0;padding:10px;background:#1a1a1a;color:#eee}"
-        "h1{margin:0 0 20px;text-align:center;font-size:24px;color:#2eb840}"
-        ".grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:20px}"
-        ".card{background:#2a2a2a;padding:15px;border-radius:8px;border:1px solid #444}"
-        ".card h3{margin:0 0 10px;font-size:14px;color:#3DA7C7}"
-        "select,input[type=range]{width:100%;padding:8px;margin:5px 0;border:1px solid #555;background:#333;color:#eee;border-radius:4px}"
-        ".sentry{grid-column:1/-1;background:#0a3a2a;border:2px solid #2eb840;padding:20px;text-align:center;font-size:18px}"
-        ".sentry select{font-size:16px;padding:10px}"
-        ".group{margin:15px 0}"
-        ".group label{display:block;font-weight:bold;margin-bottom:5px;font-size:12px;color:#aaa}"
-        "button{width:100%;padding:10px;margin:10px 0 0;background:#2eb840;color:#000;border:none;border-radius:4px;font-weight:bold;cursor:pointer}"
-        ".info{font-size:12px;color:#999;margin-top:10px;text-align:center}"
-        "</style></head><body>"
-        "<h1>DEVICE CONTROL</h1>";
+    strbuf = R"TLITE(<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>
+<meta name='viewport' content='width=device-width,initial-scale=1'>
+<meta name='theme-color' content='#113548'>
+<title>Thermal Device Control</title>
+<style>
+:root{
+  --bg:#eff6f9;
+  --card:#ffffff;
+  --ink:#11252f;
+  --muted:#5b7683;
+  --line:#bfd4de;
+  --accent:#0f7ca4;
+  --ok:#2c9a3a;
+  --warn:#cb5f2c;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;
+  font-family:'Trebuchet MS','Gill Sans','Helvetica Neue',sans-serif;
+  color:var(--ink);
+  background:
+    radial-gradient(120% 90% at 100% -10%, #d9f2ff 0, transparent 56%),
+    radial-gradient(120% 120% at -20% 120%, #ffe4c6 0, transparent 54%),
+    var(--bg);
+}
+.app{max-width:1120px;margin:0 auto;padding:16px 14px 24px}
+.topbar{display:flex;gap:12px;justify-content:space-between;align-items:flex-start;flex-wrap:wrap}
+h1{margin:0;font-size:clamp(22px,4.2vw,36px);letter-spacing:.08em}
+.sub{margin:6px 0 0;color:var(--muted);font-size:13px}
+.badge{
+  border:1px solid #9ec7da;
+  background:#e9f7fe;
+  color:#0a5876;
+  font-size:12px;
+  font-weight:700;
+  letter-spacing:.04em;
+  text-transform:uppercase;
+  padding:6px 10px;
+  border-radius:999px;
+}
+.badge.syncing{border-color:#cfbc88;background:#fff6de;color:#7f5d0a}
+.actions{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0}
+.actions a{
+  display:inline-block;
+  padding:9px 13px;
+  border-radius:10px;
+  text-decoration:none;
+  color:#fff;
+  font-weight:700;
+  letter-spacing:.04em;
+  background:linear-gradient(120deg, #0f7ca4, #0f5972);
+}
+.actions a.alt{background:linear-gradient(120deg, #ca6a1d, #914113)}
+.status{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:12px}
+.stat{
+  background:var(--card);
+  border:1px solid var(--line);
+  border-radius:12px;
+  padding:10px;
+  box-shadow:0 6px 20px rgba(17,37,47,.06);
+}
+.stat strong{
+  display:block;
+  font-size:12px;
+  color:var(--muted);
+  text-transform:uppercase;
+  letter-spacing:.08em;
+}
+.stat span{display:block;margin-top:6px;font-size:22px;font-weight:800}
+.sentry{
+  background:linear-gradient(120deg, #123648, #0f5a72);
+  color:#fff;
+  border-radius:14px;
+  padding:14px;
+  border:1px solid #2f7794;
+  margin-bottom:12px;
+  box-shadow:0 8px 24px rgba(17,37,47,.15);
+}
+.sentry-head{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.sentry h2{margin:0;font-size:20px;letter-spacing:.06em}
+.sentry .hint{font-size:12px;color:#d4edf7}
+.sentry-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+.card{
+  background:var(--card);
+  border:1px solid var(--line);
+  border-radius:12px;
+  padding:12px;
+  box-shadow:0 6px 20px rgba(17,37,47,.06);
+}
+.card h3{
+  margin:0;
+  font-size:13px;
+  letter-spacing:.12em;
+  color:#0f5a72;
+  text-transform:uppercase;
+}
+.group{margin-top:10px}
+label{display:block;font-size:13px;color:var(--muted);margin-bottom:5px;font-weight:700}
+.range-label{display:flex;justify-content:space-between;align-items:center}
+.range-value{color:var(--accent);font-weight:800;font-variant-numeric:tabular-nums}
+select,input[type=range]{
+  width:100%;
+  background:#f7fbfd;
+  border:1px solid var(--line);
+  border-radius:10px;
+  padding:9px;
+  color:var(--ink);
+  font-size:15px;
+}
+select:focus,input[type=range]:focus{outline:2px solid #8fd3ed;outline-offset:1px}
+input[type=range]{padding:0;height:32px}
+.foot{margin-top:14px;font-size:13px;color:var(--muted);text-align:center}
+.toast{
+  position:fixed;
+  right:12px;
+  bottom:12px;
+  padding:9px 12px;
+  border-radius:10px;
+  background:#ffffff;
+  border:1px solid var(--line);
+  box-shadow:0 8px 20px rgba(17,37,47,.14);
+  opacity:0;
+  transform:translateY(8px);
+  transition:all .2s ease;
+  pointer-events:none;
+  font-size:13px;
+}
+.toast.show{opacity:1;transform:translateY(0)}
+.toast.ok{border-color:#8ecb95}
+.toast.err{border-color:#dc8f75}
+@media (max-width:760px){
+  .app{padding:14px 10px 20px}
+  .sentry-grid{grid-template-columns:1fr}
+  .grid{grid-template-columns:1fr}
+  .actions a{flex:1 1 48%;text-align:center}
+}
+</style></head><body>
+<div class='app'>
+  <div class='topbar'>
+    <div>
+      <h1>THERMAL CONTROL HUB</h1>
+      <p class='sub'>Live controls with instant device sync.</p>
+    </div>
+    <span id='save-state' class='badge'>Auto-Save</span>
+  </div>
+  <div class='actions'>
+    <a href='/stream' target='_blank' rel='noopener'>Live Stream</a>
+    <a class='alt' href='/json' target='_blank' rel='noopener'>JSON Feed</a>
+  </div>
+  <div class='status'>
+    <div class='stat'><strong>Sentry</strong><span id='stat-mode'>--</span></div>
+    <div class='stat'><strong>Average</strong><span id='stat-avg'>--</span></div>
+    <div class='stat'><strong>Minimum</strong><span id='stat-min'>--</span></div>
+    <div class='stat'><strong>Maximum</strong><span id='stat-max'>--</span></div>
+    <div class='stat'><strong>Battery</strong><span id='stat-battery'>--</span></div>
+  </div>
+  <div class='sentry'>
+    <div class='sentry-head'>
+      <h2>SENTRY MODE</h2>
+      <span class='hint'>Updates every 2.5 seconds</span>
+    </div>
+    <div class='sentry-grid'>
+      <div class='group'><label for='misc_sentry_mode'>Profile</label>
+      <select id='misc_sentry_mode' onchange="s('misc_sentry_mode',this.value)">
+)TLITE";
 
-    // Sentry Mode - Big prominent control
-    strbuf += "<div class='sentry'><b>SENTRY MODE</b><br>";
-    strbuf += "<select id='misc_sentry_mode' onchange='s(\"misc_sentry_mode\",this.value)'>";
     for (int i = 0; i < draw_param->misc_sentry_mode_max; ++i) {
         strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf),
                                      "<option value=\"%d\"%s>%s</option>", i,
                                      i == draw_param->misc_sentry_mode.get() ? " selected" : "",
                                      draw_param->misc_sentry_mode.getText(i)));
     }
-    strbuf += "</select><div class='group' style='margin-top:10px'><label>Interval</label>";
-    strbuf += "<select id='misc_sentry_interval' onchange='s(\"misc_sentry_interval\",this.value)'>";
+    strbuf += "</select></div><div class='group'><label for='misc_sentry_interval'>Interval</label>";
+    strbuf += "<select id='misc_sentry_interval' onchange=\"s('misc_sentry_interval',this.value)\">";
     for (int i = 0; i < draw_param->misc_sentry_interval_max; ++i) {
         strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf),
                                      "<option value=\"%d\"%s>%s</option>", i,
                                      i == draw_param->misc_sentry_interval.get() ? " selected" : "",
                                      draw_param->misc_sentry_interval.getText(i)));
     }
-    strbuf += "</select></div></div>";
+    strbuf += "</select></div></div></div>";
 
     strbuf += "<div class='grid'>";
-    
+
     // Alarm
     strbuf += "<div class='card'><h3>ALARM</h3>";
     strbuf += "<div class='group'><label>Mode</label>";
-    strbuf += "<select id='alarm_mode' onchange='s(\"alarm_mode\",this.value)'>";
+    strbuf += "<select id='alarm_mode' onchange=\"s('alarm_mode',this.value)\">";
     for (int i = 0; i < draw_param->alarm_mode_max; ++i) {
         strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf),
                                      "<option value=\"%d\"%s>%s</option>", i,
@@ -192,7 +351,7 @@ static bool response_main(draw_param_t* draw_param, connection_t* conn) {
     }
     strbuf += "</select></div>";
     strbuf += "<div class='group'><label>Reference</label>";
-    strbuf += "<select id='alarm_reference' onchange='s(\"alarm_reference\",this.value)'>";
+    strbuf += "<select id='alarm_reference' onchange=\"s('alarm_reference',this.value)\">";
     for (int i = 0; i < draw_param->alarm_reference_max; ++i) {
         strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf),
                                      "<option value=\"%d\"%s>%s</option>", i,
@@ -200,19 +359,19 @@ static bool response_main(draw_param_t* draw_param, connection_t* conn) {
                                      draw_param->alarm_reference.getText(i)));
     }
     strbuf += "</select></div>";
-    strbuf += "<div class='group'><label>";
-    strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf), "Temp: %.1fC",
+    strbuf += "<div class='group'><label class='range-label' for='alarm_temperature'><span>Temp</span><span id='v_alarm_temperature' class='range-value'>";
+    strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf), "%.1f C",
                                  convertRawToCelsius(draw_param->alarm_temperature)));
-    strbuf += "</label>";
+    strbuf += "</span></label>";
     strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf),
-                                 "<input type='range' min='-50' max='350' step='0.5' id='alarm_temperature' value='%.1f' onchange='s(\"alarm_temperature\",this.value)'>",
+                                 "<input type='range' min='-50' max='350' step='0.5' id='alarm_temperature' value='%.1f' oninput=\"u('alarm_temperature',' C',1)\" onchange=\"s('alarm_temperature',this.value)\">",
                                  convertRawToCelsius(draw_param->alarm_temperature)));
     strbuf += "</div></div>";
 
     // Sensor
     strbuf += "<div class='card'><h3>SENSOR</h3>";
     strbuf += "<div class='group'><label>Refresh</label>";
-    strbuf += "<select id='sens_refreshrate' onchange='s(\"sens_refreshrate\",this.value)'>";
+    strbuf += "<select id='sens_refreshrate' onchange=\"s('sens_refreshrate',this.value)\">";
     for (int i = 0; i < draw_param->sens_refreshrate_max; ++i) {
         strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf),
                                      "<option value=\"%d\"%s>%s</option>", i,
@@ -221,7 +380,7 @@ static bool response_main(draw_param_t* draw_param, connection_t* conn) {
     }
     strbuf += "</select></div>";
     strbuf += "<div class='group'><label>Filter</label>";
-    strbuf += "<select id='sens_noisefilter' onchange='s(\"sens_noisefilter\",this.value)'>";
+    strbuf += "<select id='sens_noisefilter' onchange=\"s('sens_noisefilter',this.value)\">";
     for (int i = 0; i < draw_param->sens_noisefilter_max; ++i) {
         strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf),
                                      "<option value=\"%d\"%s>%s</option>", i,
@@ -230,7 +389,7 @@ static bool response_main(draw_param_t* draw_param, connection_t* conn) {
     }
     strbuf += "</select></div>";
     strbuf += "<div class='group'><label>Area</label>";
-    strbuf += "<select id='sens_monitorarea' onchange='s(\"sens_monitorarea\",this.value)'>";
+    strbuf += "<select id='sens_monitorarea' onchange=\"s('sens_monitorarea',this.value)\">";
     for (int i = 0; i < draw_param->sens_monitorarea_max; ++i) {
         strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf),
                                      "<option value=\"%d\"%s>%s</option>", i,
@@ -238,18 +397,18 @@ static bool response_main(draw_param_t* draw_param, connection_t* conn) {
                                      draw_param->sens_monitorarea.getText(i)));
     }
     strbuf += "</select></div>";
-    strbuf += "<div class='group'><label>Emissivity: ";
+    strbuf += "<div class='group'><label class='range-label' for='sens_emissivity'><span>Emissivity</span><span id='v_sens_emissivity' class='range-value'>";
     strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf), "%d%%", draw_param->sens_emissivity.get()));
-    strbuf += "</label>";
+    strbuf += "</span></label>";
     strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf),
-                                 "<input type='range' min='20' max='100' id='sens_emissivity' value='%d' onchange='s(\"sens_emissivity\",this.value)'>",
+                                 "<input type='range' min='20' max='100' id='sens_emissivity' value='%d' oninput=\"u('sens_emissivity','%%',0)\" onchange=\"s('sens_emissivity',this.value)\">",
                                  draw_param->sens_emissivity.get()));
     strbuf += "</div></div>";
 
     // Range
     strbuf += "<div class='card'><h3>RANGE</h3>";
     strbuf += "<div class='group'><label>Auto</label>";
-    strbuf += "<select id='range_autoswitch' onchange='s(\"range_autoswitch\",this.value)'>";
+    strbuf += "<select id='range_autoswitch' onchange=\"s('range_autoswitch',this.value)\">";
     for (int i = 0; i < draw_param->range_autoswitch_max; ++i) {
         strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf),
                                      "<option value=\"%d\"%s>%s</option>", i,
@@ -257,27 +416,27 @@ static bool response_main(draw_param_t* draw_param, connection_t* conn) {
                                      draw_param->range_autoswitch.getText(i)));
     }
     strbuf += "</select></div>";
-    strbuf += "<div class='group'><label>";
-    strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf), "High: %.1fC",
+    strbuf += "<div class='group'><label class='range-label' for='range_temp_upper'><span>High</span><span id='v_range_temp_upper' class='range-value'>";
+    strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf), "%.1f C",
                                  convertRawToCelsius(draw_param->range_temp_upper)));
-    strbuf += "</label>";
+    strbuf += "</span></label>";
     strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf),
-                                 "<input type='range' min='-50' max='350' step='0.5' id='range_temp_upper' value='%.1f' onchange='s(\"range_temp_upper\",this.value)'>",
+                                 "<input type='range' min='-50' max='350' step='0.5' id='range_temp_upper' value='%.1f' oninput=\"u('range_temp_upper',' C',1)\" onchange=\"s('range_temp_upper',this.value)\">",
                                  convertRawToCelsius(draw_param->range_temp_upper)));
     strbuf += "</div>";
-    strbuf += "<div class='group'><label>";
-    strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf), "Low: %.1fC",
+    strbuf += "<div class='group'><label class='range-label' for='range_temp_lower'><span>Low</span><span id='v_range_temp_lower' class='range-value'>";
+    strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf), "%.1f C",
                                  convertRawToCelsius(draw_param->range_temp_lower)));
-    strbuf += "</label>";
+    strbuf += "</span></label>";
     strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf),
-                                 "<input type='range' min='-50' max='350' step='0.5' id='range_temp_lower' value='%.1f' onchange='s(\"range_temp_lower\",this.value)'>",
+                                 "<input type='range' min='-50' max='350' step='0.5' id='range_temp_lower' value='%.1f' oninput=\"u('range_temp_lower',' C',1)\" onchange=\"s('range_temp_lower',this.value)\">",
                                  convertRawToCelsius(draw_param->range_temp_lower)));
     strbuf += "</div></div>";
 
     // Display
     strbuf += "<div class='card'><h3>DISPLAY</h3>";
     strbuf += "<div class='group'><label>Color</label>";
-    strbuf += "<select id='misc_color' onchange='s(\"misc_color\",this.value)'>";
+    strbuf += "<select id='misc_color' onchange=\"s('misc_color',this.value)\">";
     for (int i = 0; i < color_map_table_len; ++i) {
         strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf),
                                      "<option value=\"%d\"%s>%s</option>", i,
@@ -286,7 +445,7 @@ static bool response_main(draw_param_t* draw_param, connection_t* conn) {
     }
     strbuf += "</select></div>";
     strbuf += "<div class='group'><label>Pointer</label>";
-    strbuf += "<select id='misc_pointer' onchange='s(\"misc_pointer\",this.value)'>";
+    strbuf += "<select id='misc_pointer' onchange=\"s('misc_pointer',this.value)\">";
     for (int i = 0; i < draw_param->misc_pointer_max; ++i) {
         strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf),
                                      "<option value=\"%d\"%s>%s</option>", i,
@@ -295,7 +454,7 @@ static bool response_main(draw_param_t* draw_param, connection_t* conn) {
     }
     strbuf += "</select></div>";
     strbuf += "<div class='group'><label>Brightness</label>";
-    strbuf += "<select id='misc_brightness' onchange='s(\"misc_brightness\",this.value)'>";
+    strbuf += "<select id='misc_brightness' onchange=\"s('misc_brightness',this.value)\">";
     for (int i = 0; i < draw_param->misc_brightness_max; ++i) {
         strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf),
                                      "<option value=\"%d\"%s>%s</option>", i,
@@ -307,7 +466,7 @@ static bool response_main(draw_param_t* draw_param, connection_t* conn) {
     // System
     strbuf += "<div class='card'><h3>SYSTEM</h3>";
     strbuf += "<div class='group'><label>CPU Speed</label>";
-    strbuf += "<select id='misc_cpuspeed' onchange='s(\"misc_cpuspeed\",this.value)'>";
+    strbuf += "<select id='misc_cpuspeed' onchange=\"s('misc_cpuspeed',this.value)\">";
     for (int i = 0; i < draw_param->misc_cpuspeed_max; ++i) {
         strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf),
                                      "<option value=\"%d\"%s>%s</option>", i,
@@ -316,7 +475,7 @@ static bool response_main(draw_param_t* draw_param, connection_t* conn) {
     }
     strbuf += "</select></div>";
     strbuf += "<div class='group'><label>Volume</label>";
-    strbuf += "<select id='misc_volume' onchange='s(\"misc_volume\",this.value)'>";
+    strbuf += "<select id='misc_volume' onchange=\"s('misc_volume',this.value)\">";
     for (int i = 0; i < draw_param->misc_volume_max; ++i) {
         strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf),
                                      "<option value=\"%d\"%s>%s</option>", i,
@@ -325,7 +484,7 @@ static bool response_main(draw_param_t* draw_param, connection_t* conn) {
     }
     strbuf += "</select></div>";
     strbuf += "<div class='group'><label>Stream Quality</label>";
-    strbuf += "<select id='net_jpg_quality' onchange='s(\"net_jpg_quality\",this.value)'>";
+    strbuf += "<select id='net_jpg_quality' onchange=\"s('net_jpg_quality',this.value)\">";
     for (int i = 1; i <= 100; i += 10) {
         strbuf.append(cbuf, snprintf(cbuf, sizeof(cbuf),
                                      "<option value=\"%d\"%s>%d%%</option>", i,
@@ -334,8 +493,103 @@ static bool response_main(draw_param_t* draw_param, connection_t* conn) {
     }
     strbuf += "</select></div></div>";
 
-    strbuf += "</div><div class='info'>Settings auto-save | <a href='/stream' style='color:#3DA7C7;text-decoration:none'>View Stream</a></div>";
-    strbuf += "<script>function s(k,v){fetch('/param?'+k+'='+v)}</script></body></html>";
+    strbuf += R"TLITE(</div>
+<div class='foot'>Changes are sent to the device immediately.</div>
+</div>
+<div id='toast' class='toast'>Saved</div>
+<script>
+(function(){
+  var pending = 0;
+  var toastTimer = 0;
+  function setSaveState() {
+    var badge = document.getElementById('save-state');
+    if (!badge) return;
+    if (pending > 0) {
+      badge.textContent = 'Syncing';
+      badge.className = 'badge syncing';
+    } else {
+      badge.textContent = 'Auto-Save';
+      badge.className = 'badge';
+    }
+  }
+  function notify(msg, ok) {
+    var t = document.getElementById('toast');
+    if (!t) return;
+    t.textContent = msg;
+    t.className = ok ? 'toast show ok' : 'toast show err';
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(function(){ t.className = 'toast'; }, 1400);
+  }
+  window.s = async function(k, v) {
+    pending += 1;
+    setSaveState();
+    try {
+      var r = await fetch('/param?' + encodeURIComponent(k) + '=' + encodeURIComponent(v), { cache: 'no-store' });
+      if (!r.ok) throw new Error('status');
+      notify('Saved', true);
+    } catch (e) {
+      notify('Save failed', false);
+    } finally {
+      pending = Math.max(0, pending - 1);
+      setSaveState();
+      refreshStatus();
+    }
+  };
+  window.u = function(id, unit, digits) {
+    var input = document.getElementById(id);
+    var out = document.getElementById('v_' + id);
+    if (!input || !out) return;
+    var value = Number(input.value);
+    if (!isFinite(value)) value = 0;
+    if (digits === 0) {
+      out.textContent = Math.round(value) + unit;
+    } else {
+      out.textContent = value.toFixed(digits) + unit;
+    }
+  };
+  function wireRanges() {
+    var cfg = [
+      ['alarm_temperature', ' C', 1],
+      ['range_temp_upper', ' C', 1],
+      ['range_temp_lower', ' C', 1],
+      ['sens_emissivity', '%', 0]
+    ];
+    for (var i = 0; i < cfg.length; ++i) {
+      (function(entry) {
+        var el = document.getElementById(entry[0]);
+        if (!el) return;
+        el.addEventListener('input', function(){ u(entry[0], entry[1], entry[2]); });
+        u(entry[0], entry[1], entry[2]);
+      })(cfg[i]);
+    }
+  }
+  async function refreshStatus() {
+    try {
+      var r = await fetch('/api/sentry/status', { cache: 'no-store' });
+      if (!r.ok) return;
+      var d = await r.json();
+      var batt = Number(d.battery_level);
+      var hasSample = !!d.has_sample;
+      document.getElementById('stat-mode').textContent =
+        d.sentry_mode ? (hasSample ? 'Armed' : 'Starting') : 'Off';
+      if (hasSample) {
+        document.getElementById('stat-avg').textContent = Number(d.avg_temp).toFixed(1) + ' C';
+        document.getElementById('stat-min').textContent = Number(d.min_temp).toFixed(1) + ' C';
+        document.getElementById('stat-max').textContent = Number(d.max_temp).toFixed(1) + ' C';
+      } else {
+        document.getElementById('stat-avg').textContent = '--';
+        document.getElementById('stat-min').textContent = '--';
+        document.getElementById('stat-max').textContent = '--';
+      }
+      document.getElementById('stat-battery').textContent = (isFinite(batt) ? batt : 0) + '%';
+    } catch (e) {}
+  }
+  wireRanges();
+  setSaveState();
+  refreshStatus();
+  setInterval(refreshStatus, 2500);
+})();
+</script></body></html>)TLITE";
 
     client->print(
         "HTTP/1.1 200 OK\nContent-Type: text/html\nConnection: keep-alive\n");
@@ -346,64 +600,92 @@ static bool response_main(draw_param_t* draw_param, connection_t* conn) {
 
 static bool response_param(draw_param_t* draw_param, connection_t* conn) {
     auto client = &conn->client;
-    int pos     = conn->request_get.find('=');
-    if (pos >= 0) {
+    size_t pos = conn->request_get.find('=');
+    bool web_param_touched = false;
+    if (pos != std::string::npos) {
         auto key = conn->request_get.substr(0, pos);
-        ++pos;
-        auto val = conn->request_get.substr(pos);
+        auto val = conn->request_get.substr(pos + 1);
 
         if (key == "alarm_temperature") {
             draw_param->alarm_temperature =
                 convertCelsiusToRaw(atof(val.c_str()));
+            web_param_touched = true;
         } else if (key == "range_temp_upper") {
             draw_param->range_temp_upper =
                 convertCelsiusToRaw(atof(val.c_str()));
+            web_param_touched = true;
         } else if (key == "range_temp_lower") {
             draw_param->range_temp_lower =
                 convertCelsiusToRaw(atof(val.c_str()));
+            web_param_touched = true;
         } else {
             int v = atoi(val.c_str());
             if (key == "alarm_mode") {
                 draw_param->alarm_mode.set(v);
+                web_param_touched = true;
             } else if (key == "alarm_reference") {
                 draw_param->alarm_reference.set(v);
+                web_param_touched = true;
             }
             // else if (key == "alarm_behavior"    ) {
             // draw_param->alarm_behavior  .set(v); }
             else if (key == "sens_refreshrate") {
                 draw_param->sens_refreshrate.set(v);
+                web_param_touched = true;
             } else if (key == "sens_noisefilter") {
                 draw_param->sens_noisefilter.set(v);
+                web_param_touched = true;
             } else if (key == "sens_monitorarea") {
                 draw_param->sens_monitorarea.set(v);
+                web_param_touched = true;
             } else if (key == "sens_emissivity") {
                 draw_param->sens_emissivity.set(v);
+                web_param_touched = true;
             } else if (key == "range_autoswitch") {
                 draw_param->range_autoswitch.set(v);
+                web_param_touched = true;
             } else if (key == "net_jpg_quality") {
                 draw_param->net_jpg_quality.set(v);
+                web_param_touched = true;
             } else if (key == "misc_cpuspeed") {
                 draw_param->misc_cpuspeed.set(v);
+                web_param_touched = true;
             } else if (key == "misc_volume") {
-                draw_param->misc_volume.set(v);
+                bool changed = draw_param->misc_volume.set(v);
+                web_param_touched = true;
+                if (changed) {
+                    config_save_countdown = 1;
+                }
             } else if (key == "misc_brightness") {
-                draw_param->misc_brightness.set(v);
+                bool changed = draw_param->misc_brightness.set(v);
+                web_param_touched = true;
+                if (changed) {
+                    config_save_countdown = 1;
+                }
             } else if (key == "misc_pointer") {
                 draw_param->misc_pointer.set(v);
+                web_param_touched = true;
             } else if (key == "misc_layout") {
                 draw_param->misc_layout.set(v);
                 draw_param->in_config_mode = false;
+                web_param_touched = true;
             } else if (key == "misc_color") {
                 draw_param->misc_color.set(v);
+                web_param_touched = true;
             } else if (key == "misc_sentry_mode") {
                 draw_param->misc_sentry_mode.set(v);
                 config_save_countdown = 60;
+                web_param_touched = true;
             } else if (key == "misc_sentry_interval") {
                 draw_param->misc_sentry_interval.set(v);
                 config_save_countdown = 60;
+                web_param_touched = true;
             }
         }
         // draw_param->saveNvs();
+    }
+    if (web_param_touched) {
+        web_ui_last_activity_millis = millis();
     }
 
     std::string strbuf;
@@ -591,18 +873,16 @@ static bool response_wifi(draw_param_t* draw_param, connection_t* conn) {
     //*/
     if (conn->request_post.length()) {
         std::string ssid, password;
-        int pos1 = 0;
-        int pos2 = 0;
-        bool end = false;
-        do {
-            pos1 = conn->request_post.find('=', pos2);
-            if (pos1 < 0) break;
-            auto key = conn->request_post.substr(pos2, pos1 - pos2);
-            pos2     = conn->request_post.find('&', ++pos1);
-            end      = (pos2 < 0);
-            if (end) pos2 = conn->request_post.length();
-            auto val = conn->request_post.substr(pos1, pos2++ - pos1++);
-            // ESP_LOGE("DEBUG","key : %s  val : %s", key.c_str(), val.c_str());
+        size_t start = 0;
+        while (start < conn->request_post.length()) {
+            size_t equal = conn->request_post.find('=', start);
+            if (equal == std::string::npos) break;
+            size_t amp = conn->request_post.find('&', equal + 1);
+            size_t end = (amp == std::string::npos) ? conn->request_post.length()
+                                                    : amp;
+
+            auto key = conn->request_post.substr(start, equal - start);
+            auto val = conn->request_post.substr(equal + 1, end - (equal + 1));
 
             char buf[64];
             decode_uri(buf, val.c_str(), sizeof(buf));
@@ -611,7 +891,10 @@ static bool response_wifi(draw_param_t* draw_param, connection_t* conn) {
             } else if (key == "p") {
                 password = buf;
             }
-        } while (!end);
+
+            if (amp == std::string::npos) break;
+            start = amp + 1;
+        }
         redirect_header(client, "/wifi");
 
         if (ssid.length()) {
@@ -709,7 +992,6 @@ static bool response_wifi(draw_param_t* draw_param, connection_t* conn) {
     }
 
     client->print(html_3);
-    int i     = 0;
     int count = WiFi.scanComplete();
     for (int i = 0; i < count; ++i) {
         auto ssid = WiFi.SSID(i);
@@ -844,17 +1126,26 @@ static bool response_sentry_status(draw_param_t* draw_param, connection_t* conn)
     auto client = &conn->client;
     char cbuf[256];
     std::string response;
+    uint32_t now_sec = millis() / 1000;
+    uint32_t sample_age_sec =
+        sentry_data.last_sample_time && now_sec >= sentry_data.last_sample_time
+            ? (now_sec - sentry_data.last_sample_time)
+            : 0;
     
     response += HTTP_200_json;
     response += "{\n";
     response.append(cbuf, snprintf(cbuf, sizeof(cbuf), 
         "  \"sentry_mode\": %s,\n", draw_param->misc_sentry_mode.get() != draw_param_t::misc_sentry_mode_t::misc_sentry_mode_off ? "true" : "false"));
     response.append(cbuf, snprintf(cbuf, sizeof(cbuf),
+        "  \"has_sample\": %s,\n", sentry_data.has_sample ? "true" : "false"));
+    response.append(cbuf, snprintf(cbuf, sizeof(cbuf),
         "  \"avg_temp\": %.1f,\n", sentry_data.last_avg_temp));
     response.append(cbuf, snprintf(cbuf, sizeof(cbuf),
         "  \"min_temp\": %.1f,\n", sentry_data.last_min_temp));
     response.append(cbuf, snprintf(cbuf, sizeof(cbuf),
         "  \"max_temp\": %.1f,\n", sentry_data.last_max_temp));
+    response.append(cbuf, snprintf(cbuf, sizeof(cbuf),
+        "  \"sample_age_sec\": %u,\n", sample_age_sec));
     response.append(cbuf, snprintf(cbuf, sizeof(cbuf),
         "  \"battery_level\": %d\n", draw_param->battery_level));
     response += "}\n";
@@ -966,7 +1257,6 @@ void webserverTask(void* arg) {
             if (!conn.connected) {
                 conn.connected = true;
                 conn.client    = httpServer.available();
-                snprintf(conn.boundary, sizeof(conn.boundary), "tlite");
                 conn.connect_millis = current_millis;
             }
         }
@@ -997,8 +1287,7 @@ void webserverTask(void* arg) {
                 }
             } else {
                 conn.connect_millis = current_millis;
-                int available_len;
-                while (available_len = client->available()) {
+                while (client->available() > 0) {
                     char c = client->read();
                     if (c == '\r') {
                         continue;
@@ -1062,25 +1351,29 @@ void webserverTask(void* arg) {
                             if (is_post ||
                                 conn.line_buf.compare(0, 5, "GET /") == 0) {
                                 conn.is_post = is_post;
-                                int pos1     = conn.line_buf.find('/');
-                                int pos2     = conn.line_buf.find('?', pos1);
-                                int pos3     = conn.line_buf.find(' ', pos1);
-                                if (pos2 < 0) {
-                                    conn.request_path =
-                                        conn.line_buf.substr(pos1, pos3 - pos1)
-                                            .c_str();
-                                    conn.request_get = "";
+                                size_t pos1 = conn.line_buf.find('/');
+                                if (pos1 == std::string::npos) {
+                                    conn.line_buf.clear();
+                                    continue;
+                                }
+                                size_t pos3 = conn.line_buf.find(' ', pos1);
+                                if (pos3 == std::string::npos) {
+                                    conn.line_buf.clear();
+                                    continue;
+                                }
+                                size_t pos2 = conn.line_buf.find('?', pos1);
+                                if (pos2 == std::string::npos || pos2 > pos3) {
+                                    conn.request_path = conn.line_buf.substr(
+                                        pos1, pos3 - pos1);
+                                    conn.request_get.clear();
                                 } else {
-                                    conn.request_path =
-                                        conn.line_buf.substr(pos1, pos2 - pos1)
-                                            .c_str();
-                                    ++pos2;
-                                    conn.request_get =
-                                        conn.line_buf.substr(pos2, pos3 - pos2)
-                                            .c_str();
+                                    conn.request_path = conn.line_buf.substr(
+                                        pos1, pos2 - pos1);
+                                    conn.request_get = conn.line_buf.substr(
+                                        pos2 + 1, pos3 - (pos2 + 1));
                                 }
                             }
-                            conn.line_buf = "";
+                            conn.line_buf.clear();
                         }
                     }
                 }
