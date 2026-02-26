@@ -107,7 +107,13 @@ static ui_orientation_t detect_orientation(float ax, float ay,
                                            ui_orientation_t fallback) {
     const float abs_ax = fabsf(ax);
     const float abs_ay = fabsf(ay);
-    static constexpr float axis_hysteresis = 0.10f;
+    static constexpr float axis_hysteresis = 0.18f;
+    static constexpr float min_axis_tilt   = 0.52f;
+
+    // Ignore weak tilt angles to avoid rotation noise when mostly flat/upright.
+    if (abs_ax < min_axis_tilt && abs_ay < min_axis_tilt) {
+        return fallback;
+    }
 
     if (abs_ax > (abs_ay + axis_hysteresis)) {
         return (ax >= 0.0f) ? ui_orientation_t::landscape_0
@@ -176,7 +182,12 @@ static void update_orientation_awareness(draw_param_t* param) {
     static ui_orientation_t stable           = ui_orientation_t::landscape_0;
     static ui_orientation_t candidate        = ui_orientation_t::landscape_0;
     static uint8_t candidate_stable_count    = 0;
+    static uint32_t last_apply_ms            = 0;
     static uint32_t next_orientation_read_ms = 0;
+    static float filtered_ax                 = 0.0f;
+    static float filtered_ay                 = 0.0f;
+    static float filtered_az                 = 1.0f;
+    static bool filter_initialized           = false;
 
     const uint32_t now = millis();
     if (now < next_orientation_read_ms) {
@@ -191,26 +202,64 @@ static void update_orientation_awareness(draw_param_t* param) {
         return;
     }
 
-    if (!initialized) {
-        initialized = true;
-        stable = candidate = detect_orientation(ax, ay, ui_orientation_t::landscape_0);
-        apply_orientation(param, stable);
+    if (!filter_initialized) {
+        filtered_ax        = ax;
+        filtered_ay        = ay;
+        filtered_az        = az;
+        filter_initialized = true;
+    } else {
+        static constexpr float accel_alpha = 0.28f;
+        filtered_ax += (ax - filtered_ax) * accel_alpha;
+        filtered_ay += (ay - filtered_ay) * accel_alpha;
+        filtered_az += (az - filtered_az) * accel_alpha;
+    }
+
+    // Skip rotation updates while the unit is being shaken/moved quickly.
+    float g2 = filtered_ax * filtered_ax + filtered_ay * filtered_ay +
+               filtered_az * filtered_az;
+    if (g2 < 0.60f || g2 > 1.45f) {
         return;
     }
 
-    auto detected = detect_orientation(ax, ay, stable);
+    // Ignore face-up/face-down posture where X/Y tilt signal is unstable.
+    if (fabsf(filtered_az) > 0.88f) {
+        return;
+    }
+
+    if (!initialized) {
+        initialized = true;
+        stable = candidate = detect_orientation(filtered_ax, filtered_ay,
+                                                ui_orientation_t::landscape_0);
+        apply_orientation(param, stable);
+        last_apply_ms = now;
+        return;
+    }
+
+    auto detected = detect_orientation(filtered_ax, filtered_ay, stable);
     if (detected != candidate) {
-        candidate             = detected;
+        candidate              = detected;
         candidate_stable_count = 0;
         return;
     }
-    if (candidate_stable_count < 3) {
+    if (detected == stable) {
+        candidate_stable_count = 0;
+        return;
+    }
+    if (candidate_stable_count < 4) {
         ++candidate_stable_count;
         return;
     }
+
+    // Holdoff reduces back-to-back flips when near orientation boundaries.
+    if ((now - last_apply_ms) < 500) {
+        return;
+    }
+
     if (stable != detected) {
         stable = detected;
         apply_orientation(param, stable);
+        last_apply_ms         = now;
+        candidate_stable_count = 0;
     }
 }
 
@@ -3471,12 +3520,19 @@ void loop(void) {
     static uint8_t shutdown_warning_remaining = 0;
     static uint32_t shutdown_warning_next_ms = 0;
     static bool prev_sentry_active           = false;
+    static bool sentry_backlight_forced_off  = false;
+    bool sentry_active =
+        draw_param.misc_sentry_mode.get() !=
+        draw_param_t::misc_sentry_mode_t::misc_sentry_mode_off;
 
     if (config_save_countdown) {
         auto br = low_power_mode_active
                       ? draw_param.misc_brightness_value[
                             draw_param.misc_brightness_t::misc_brightness_low]
                       : draw_param.misc_brightness_value[draw_param.misc_brightness];
+        if (sentry_active) {
+            br = 0;
+        }
         if (display.getBrightness() != br) {
             display.setBrightness(br);
         }
@@ -3656,10 +3712,6 @@ void loop(void) {
     }
     
     // **SENTRY MODE HANDLING**
-    bool sentry_active =
-        draw_param.misc_sentry_mode.get() !=
-        draw_param_t::misc_sentry_mode_t::misc_sentry_mode_off;
-
     if (sentry_active && !prev_sentry_active) {
 #if !defined(WIFI_DISABLED)
         if (draw_param.net_wifi_mode ==
@@ -3671,30 +3723,35 @@ void loop(void) {
 #endif
         sentry_data.last_report_time = 0;
         web_ui_last_activity_millis  = millis();
+        display.sleep();
+        display.setBrightness(0);
+        sentry_backlight_forced_off = true;
+    } else if (!sentry_active && prev_sentry_active &&
+               sentry_backlight_forced_off) {
+        auto br = low_power_mode_active
+                      ? draw_param.misc_brightness_value[
+                            draw_param.misc_brightness_t::misc_brightness_low]
+                      : draw_param.misc_brightness_value[
+                            draw_param.misc_brightness];
+        display.wakeup();
+        display.setBrightness(br);
+        sentry_backlight_forced_off = false;
     }
     prev_sentry_active = sentry_active;
 
     if (sentry_active) {
         // Keep auto-poweroff timer fresh while Sentry mode is active.
         last_activity_time = millis();
-
-        // Center button single press: show SENTRY MODE for a few seconds
-        if (M5.BtnC.wasClicked()) {
-            const char* temp_line = nullptr;
-            char temp_str[32];
-            if (sentry_data.has_sample) {
-                snprintf(temp_str, sizeof(temp_str), "%.1fC", sentry_data.last_avg_temp);
-                temp_line = temp_str;
-            }
-            overlay_ui.show(64, "SENTRY MODE", temp_line);
-            if (draw_param.misc_volume != draw_param.misc_volume_t::misc_volume_mute) {
-                M5.Speaker.tone(1000, 100);
-            }
-            web_ui_last_activity_millis = millis();
+        if (!sentry_backlight_forced_off) {
+            display.sleep();
+            display.setBrightness(0);
+            sentry_backlight_forced_off = true;
+        } else if (display.getBrightness() != 0) {
+            display.setBrightness(0);
         }
 
-        // Center button hold: exit sentry mode
-        if (M5.BtnC.wasHold()) {
+        // Any middle-button interaction exits sentry mode immediately.
+        if (M5.BtnC.wasPressed() || M5.BtnC.wasClicked() || M5.BtnC.wasHold()) {
             draw_param.misc_sentry_mode.set(draw_param_t::misc_sentry_mode_t::misc_sentry_mode_off);
             ::config_save_countdown = 60;
             overlay_ui.show(64, "Exiting Sentry");
@@ -3704,6 +3761,7 @@ void loop(void) {
             }
             last_activity_time = millis();
             web_ui_last_activity_millis = last_activity_time;
+            sentry_active = false;
         }
     }
     
