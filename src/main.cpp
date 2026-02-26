@@ -3466,6 +3466,13 @@ void setup(void) {
     WiFi.disconnect(true);
     WiFi.mode(WIFI_OFF);
 
+    // Never boot directly into sentry mode.
+    draw_param.misc_sentry_mode.set(
+        draw_param_t::misc_sentry_mode_t::misc_sentry_mode_off);
+    sentry_data.has_sample       = false;
+    sentry_data.last_sample_time = 0;
+    sentry_data.last_report_time = 0;
+
     display.setBrightness(
         draw_param.misc_brightness_value[draw_param.misc_brightness]);
 
@@ -3753,8 +3760,12 @@ void loop(void) {
             display.setBrightness(0);
         }
 
-        // Any middle-button interaction exits sentry mode immediately.
-        if (M5.BtnC.wasPressed() || M5.BtnC.wasClicked() || M5.BtnC.wasHold()) {
+        // Middle-button mapping differs by board; accept BtnB and BtnC.
+        const bool sentry_exit_requested =
+            M5.BtnB.wasPressed() || M5.BtnB.wasClicked() || M5.BtnB.wasHold() ||
+            M5.BtnB.isPressed() || M5.BtnC.wasPressed() || M5.BtnC.wasClicked() ||
+            M5.BtnC.wasHold() || M5.BtnC.isPressed();
+        if (sentry_exit_requested) {
             draw_param.misc_sentry_mode.set(draw_param_t::misc_sentry_mode_t::misc_sentry_mode_off);
             ::config_save_countdown = 60;
             overlay_ui.show(64, "Exiting Sentry");
